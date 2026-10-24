@@ -340,14 +340,8 @@ fn apply_heading_line(s: &mut Session, at: &Pos, level: u8) -> Result<(), CmdErr
     super::para::set_heading(s, at.story, &prev, Some(level))?;
     // Removed tabs change the text, and the formatting comparison after the command only looks
     // at paragraphs that keep theirs, so the style change is recorded here.
-    if s.doc.settings.track_changes
-        && s.prefs.markup.track_formatting
-        && s.doc.para(at.story, &prev).is_some_and(|p| p.text != before.text && p.props.fmt_change.is_none())
-    {
-        let rev = super::new_revision(s, wordcraft_doc::RevisionKind::Format);
-        let p = s.doc.para_mut(at.story, &prev)?;
-        p.props.fmt_change = wordcraft_doc::props::PropChange::boxed(rev, before.props.formatting());
-        p.touch();
+    if s.doc.para(at.story, &prev).is_some_and(|p| p.text != before.text) {
+        super::fmt_revisions::record_para_props(s, at.story, &prev, &before.props)?;
     }
     s.sel = Selection::caret(at.clone());
     Ok(())

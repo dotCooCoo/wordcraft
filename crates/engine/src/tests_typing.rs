@@ -723,6 +723,46 @@ fn a_tracked_heading_autoformat_can_be_rejected() {
 }
 
 #[test]
+fn a_tracked_heading_autoformat_supersedes_another_authors_formatting() {
+    use wordcraft_doc::props::Align;
+    // Ana centers the line; Ben types a tab before it and makes it Heading 2. Ben's tab is
+    // removed, and the heading's formatting change is Ben's, holding Ana's centered Normal line.
+    let mut s = with_heading_styles("Title\n");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "para.align", json!({"value": "center"}));
+    s.author = "Ben".into();
+    typ(&mut s, "\t");
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref()), ("Title", Some("Heading2")));
+    let ch = p.props.fmt_change.as_deref();
+    let author = ch.and_then(|c| s.doc.revisions.get(c.rev as usize)).map(|r| r.author.as_str());
+    assert_eq!(author, Some("Ben"), "{:?}", s.doc.revisions);
+    assert_eq!(ch.map(|c| (c.old.style.as_deref(), c.old.align)), Some((None, Some(Align::Center))));
+    // Rejecting it brings back Ana's centered Normal line.
+    run(&mut s, "review.rejectAll", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref(), p.props.align), ("Title", None, Some(Align::Center)));
+    // The author's own earlier change keeps the formatting before it.
+    let mut s = with_heading_styles("Title\n");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    s.author = "Ana".into();
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "para.align", json!({"value": "center"}));
+    typ(&mut s, "\t");
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    let ch = p.props.fmt_change.as_deref();
+    assert_eq!(ch.and_then(|c| s.doc.revisions.get(c.rev as usize)).map(|r| r.author.as_str()), Some("Ana"));
+    assert_eq!(ch.map(|c| c.old.style.as_deref()), Some(None));
+    assert!(ch.is_some_and(|c| c.old.align != Some(Align::Center)), "{ch:?}");
+}
+
+#[test]
 fn a_locked_heading_style_is_not_applied_as_you_type() {
     let mut s = s();
     run(&mut s, "tools.autocorrect", json!({"headingStyles": true}));

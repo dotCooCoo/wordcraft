@@ -184,7 +184,11 @@ Applied when a word is finished by a space, punctuation **or Enter** (`enter_fin
   (`undo_right_after_a_heading_autoformat_keeps_the_enter`); with Track Changes on, the tabs are
   marked deleted (or removed, when the same author inserted them) and the style change is a
   tracked formatting change, and a line holding a tracked deletion stays as it is
-  (`a_tracked_heading_autoformat_can_be_rejected`); a heading style locked by formatting
+  (`a_tracked_heading_autoformat_can_be_rejected`); the formatting change is this author's and
+  replaces another author's earlier formatting change on the line, so rejecting it brings back
+  the line as that author left it
+  (`a_tracked_heading_autoformat_supersedes_another_authors_formatting`); a heading style
+  locked by formatting
   restrictions is not applied (`a_locked_heading_style_is_not_applied_as_you_type`).
 - `+---+------+` Enter (plus signs around runs of hyphens, the whole paragraph) → a one-row
   table across the text width, each column as wide as its share of the hyphens; the caret goes
