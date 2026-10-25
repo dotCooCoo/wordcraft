@@ -1455,6 +1455,8 @@ impl WordApp {
                 | "file.rename"
                 | "file.privacy"
                 | "file.privacyOptions"
+                | "file.proofing"
+                | "file.proofingExceptions"
                 | "file.setAuthor"
                 | "file.compatibility"
                 | "file.encrypt"
@@ -9032,6 +9034,8 @@ mod tests {
         keeps_view(&mut a, "file.rename", json!({"name": "renamed"}));
         keeps_view(&mut a, "file.privacyOptions", json!({"removeDateTime": true}));
         keeps_view(&mut a, "file.privacy", json!({}));
+        keeps_view(&mut a, "file.proofingExceptions", json!({"hideGrammarErrors": true}));
+        keeps_view(&mut a, "file.proofing", json!({}));
         keeps_view(&mut a, "file.setAuthor", json!({"name": "Ada"}));
         keeps_view(&mut a, "file.compatibility", json!({}));
         keeps_view(&mut a, "file.share", json!({}));

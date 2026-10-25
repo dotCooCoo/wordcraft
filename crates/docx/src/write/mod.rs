@@ -1013,6 +1013,13 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: O
     if s.mirror_margins {
         w.empty("w:mirrorMargins", &[]);
     }
+    // After `w:gutterAtTop` and before `w:proofState` in CT_Settings.
+    if s.hide_spelling_errors {
+        w.empty("w:hideSpellingErrors", &[]);
+    }
+    if s.hide_grammar_errors {
+        w.empty("w:hideGrammaticalErrors", &[]);
+    }
     if let Some(id) = template_rel {
         w.empty("w:attachedTemplate", &[("r:id", id)]);
     }

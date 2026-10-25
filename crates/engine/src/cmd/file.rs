@@ -167,6 +167,28 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("file.privacy", "Privacy Settings", "File › Options › Save", |s, _| Ok(privacy(s)))
             .params(r#"{} → {"removePersonalInfo": bool, "removeDateTime": bool} (file.privacyOptions changes them)"#)
             .pure(),
+        // Options › Proofing › Exceptions for: the document's `w:hideSpellingErrors` and
+        // `w:hideGrammaticalErrors` settings, saved with it. They hide the squiggles only;
+        // Spelling & Grammar and `review.issues` still find the errors. Changing them is a
+        // document change, as the privacy options are; reading them is `file.proofing`.
+        CommandSpec::new("file.proofingExceptions", "Proofing Exceptions", "File › Options › Proofing", |s, v| {
+            let spelling = p::bool(v, "hideSpellingErrors");
+            let grammar = p::bool(v, "hideGrammarErrors");
+            if spelling.is_none() && grammar.is_none() {
+                return Err(CmdError::Params("give hideSpellingErrors or hideGrammarErrors (file.proofing reads them)".into()));
+            }
+            if let Some(on) = spelling {
+                s.doc.settings.hide_spelling_errors = on;
+            }
+            if let Some(on) = grammar {
+                s.doc.settings.hide_grammar_errors = on;
+            }
+            Ok(proofing(s))
+        })
+        .params(r#"{"hideSpellingErrors"?: bool (no squiggles under spelling errors in this document), "hideGrammarErrors"?: bool (no marks under grammar errors in this document)}; at least one, saved with the document"#),
+        CommandSpec::new("file.proofing", "Proofing Exception Settings", "File › Options › Proofing", |s, _| Ok(proofing(s)))
+            .params(r#"{} → {"hideSpellingErrors": bool, "hideGrammarErrors": bool} (file.proofingExceptions changes them)"#)
+            .pure(),
         CommandSpec::new("document.inspect", "Inspect Document", "Agents", inspect).params(r#"{"text"?: bool}"#).pure(),
         CommandSpec::new("document.text", "Document Text", "Agents", |s, v| {
             let story = super::story_param(s, v);
@@ -198,6 +220,11 @@ pub fn specs() -> Vec<CommandSpec> {
 /// The document's privacy settings, as `file.privacy` and `file.privacyOptions` return them.
 fn privacy(s: &Session) -> Value {
     json!({"removePersonalInfo": s.doc.settings.remove_personal_info, "removeDateTime": s.doc.settings.remove_date_time})
+}
+
+/// The document's proofing exceptions, as `file.proofing` and `file.proofingExceptions` return them.
+fn proofing(s: &Session) -> Value {
+    json!({"hideSpellingErrors": s.doc.settings.hide_spelling_errors, "hideGrammarErrors": s.doc.settings.hide_grammar_errors})
 }
 
 /// Create a blank document in the saved proofing language, or use the requested template.

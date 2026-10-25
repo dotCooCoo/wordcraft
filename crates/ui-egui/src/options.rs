@@ -308,6 +308,22 @@ fn proofing(app: &mut WordApp, ui: &mut Ui) {
     flag(app, ui, "Check spelling as you type", "checkSpelling", spelling);
     ui.add_enabled_ui(app.session.view.proofing, |ui| flag(app, ui, "Mark grammar errors as you type", "markGrammar", pr.mark_grammar));
     ui.add_space(8.0);
+    // The open document's `file.proofingExceptions`: saved with it, and only the marks are hidden.
+    section(ui, "Exceptions for this document");
+    let settings = &app.session.doc.settings;
+    let rows = [
+        ("Hide spelling errors in this document only", "hideSpellingErrors", settings.hide_spelling_errors),
+        ("Hide grammar errors in this document only", "hideGrammarErrors", settings.hide_grammar_errors),
+    ];
+    for (label, key, value) in rows {
+        let mut v = value;
+        if ui.checkbox(&mut v, tl!(label)).changed()
+            && let Err(e) = app.run("file.proofingExceptions", json!({ key: v }))
+        {
+            app.status(e);
+        }
+    }
+    ui.add_space(8.0);
     section(ui, "Custom dictionary");
     custom_dictionary(app, ui);
     ui.add_space(8.0);
@@ -1138,6 +1154,35 @@ mod tests {
         h.get_by_label("Remove my name from comments, changes and file properties when saving").click();
         h.run_steps(4);
         assert!(!h.state().session.doc.settings.remove_personal_info, "and off again");
+    }
+
+    /// File › Options › Proofing › Exceptions: the checkboxes are the document's
+    /// `file.proofingExceptions` settings.
+    #[test]
+    fn proofing_exception_checkboxes_hide_the_document_errors() {
+        let mut a = app();
+        a.run("file.options", json!({"pane": "proofing"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        assert!(h.query_by_label("Exceptions for this document").is_some(), "the section is there");
+        h.get_by_label("Hide spelling errors in this document only").click();
+        h.run_steps(4);
+        assert!(h.state().session.doc.settings.hide_spelling_errors);
+        assert!(!h.state().session.doc.settings.hide_grammar_errors);
+        h.get_by_label("Hide grammar errors in this document only").click();
+        h.run_steps(4);
+        let proofing = h.state_mut().session.run("file.proofing", &json!({})).unwrap();
+        assert_eq!(proofing, json!({"hideSpellingErrors": true, "hideGrammarErrors": true}));
+        h.get_by_label("Hide spelling errors in this document only").click();
+        h.run_steps(4);
+        assert!(!h.state().session.doc.settings.hide_spelling_errors, "and off again");
     }
 
     /// File › Options › Accessibility › Animation effects: Use system setting (the default), On
