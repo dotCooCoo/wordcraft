@@ -26,6 +26,7 @@ pub mod fields;
 pub mod fill;
 pub mod freeform;
 pub mod graphic;
+pub mod ime_text;
 pub mod legacy_form;
 pub mod line_dash;
 pub mod link;

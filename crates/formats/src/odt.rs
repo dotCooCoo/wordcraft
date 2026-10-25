@@ -440,7 +440,7 @@ impl Writer {
     /// Paragraph `p`, or with `chain` the paragraphs joined at deleted paragraph marks (`p`
     /// is the first).
     fn para_in(&mut self, p: &Para, chain: Option<&Vec<Para>>, out: &mut String) {
-        let paras: &[Para] = chain.map(|c| c.as_slice()).unwrap_or(std::slice::from_ref(p));
+        let paras: &[Para] = chain.map(Vec::as_slice).unwrap_or(std::slice::from_ref(p));
         let start = self.master.take();
         self.chain = chain.map(|c| c.iter().map(|q| self.para_style(q)).collect()).unwrap_or_default();
         self.part = 0;

@@ -435,6 +435,11 @@ fn autocorrect_options(s: &mut Session, v: &Value) -> CmdResult {
     }))
 }
 
+/// Builds the tools, review, file and insertion command table: Repeat and macros; AutoCorrect,
+/// keyboard and ribbon customization and search; Compare, accessibility, inspection, protection,
+/// versions, recovery, templates and autosave; compatibility, sharing, Quick Parts, fields,
+/// signatures, objects and spreadsheets; header/footer, table and numbering settings; language,
+/// markup, editor and selection commands; and design and view options.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("edit.repeat", "Repeat", "Quick Access Toolbar", |s, _| {
@@ -527,6 +532,10 @@ pub fn specs() -> Vec<CommandSpec> {
                 s.doc.settings.protection = protection;
                 s.doc.settings.protect_hash = protect_hash;
                 s.doc.settings.protect_formatting = protect_formatting;
+                // The restored document reuses the open document's id; the body and any equation
+                // editing session are replaced.
+                s.note_body_replaced();
+                s.math = None;
                 s.touch();
                 s.clamp_selection();
             }
@@ -1338,6 +1347,8 @@ fn compare(s: &mut Session, v: &Value) -> CmdResult {
         let doc = crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?;
         s.doc = doc;
         s.doc.ensure_nonempty();
+        s.note_body_replaced();
+        s.math = None;
     }
     let level = p::str(v, "level").unwrap_or("word");
     let opts = CompareOptions {
@@ -1419,6 +1430,8 @@ fn compare(s: &mut Session, v: &Value) -> CmdResult {
     }
     s.doc.body = out;
     s.doc.ensure_nonempty();
+    s.note_body_replaced();
+    s.math = None;
     if show_in != "original" || p::str(v, "original").is_some() {
         // The result is a new, untitled document: saving it never overwrites either file.
         s.path = None;
