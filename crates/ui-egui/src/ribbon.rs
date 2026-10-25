@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use crate::colors::{Remember, Target};
 use crate::options::MeasureExt;
 use crate::theme::{Tokens, medium, regular, semibold};
-use crate::widgets::{CONTENT_H, LABEL_H, big, big_toggle, group, menu_button, small, split};
+use crate::widgets::{CONTENT_H, LABEL_H, big, big_split, big_toggle, group, menu_button, small, split};
 use crate::{WordApp, icons};
 
 pub const TABS: [&str; 13] = wordcraft_engine::ribbon::TABS;
@@ -1105,7 +1105,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
     let st = app.session.run("format.state", &json!({})).unwrap_or_default();
     let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
     group(ui, "Clipboard", Some("edit.clipboardPane"), app, |ui, app| {
-        menu_button(ui, app, "paste", Some("Paste"), "Paste (⌘V)", true, "edit.paste", |ui, app| {
+        big_split(ui, app, "paste", "Paste", "Paste (⌘V)", "edit.paste", json!({}), |ui, app| {
             mi(ui, app, "Paste", "edit.paste", json!({}));
             mi(ui, app, "Keep Text Only", "edit.pasteText", json!({}));
             mi(ui, app, "Merge Formatting", "edit.pasteMerge", json!({}));
@@ -2213,13 +2213,13 @@ fn review(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Changes", None, app, |ui, app| {
-        menu_button(ui, app, "accept", Some("Accept"), "Accept", true, "review.accept", |ui, app| {
+        big_split(ui, app, "accept", "Accept", "Accept and Move to Next", "review.accept", json!({"next": true}), |ui, app| {
             mi(ui, app, "Accept and Move to Next", "review.accept", json!({"next": true}));
             mi(ui, app, "Accept This Change", "review.accept", json!({}));
             mi(ui, app, "Accept All Changes", "review.acceptAll", json!({}));
             mi(ui, app, "Accept All Changes and Stop Tracking", "review.acceptAll", json!({"stopTracking": true}));
         });
-        menu_button(ui, app, "reject", Some("Reject"), "Reject", true, "review.reject", |ui, app| {
+        big_split(ui, app, "reject", "Reject", "Reject and Move to Next", "review.reject", json!({"next": true}), |ui, app| {
             mi(ui, app, "Reject and Move to Next", "review.reject", json!({"next": true}));
             mi(ui, app, "Reject Change", "review.reject", json!({}));
             mi(ui, app, "Reject All Changes", "review.rejectAll", json!({}));
@@ -3296,6 +3296,86 @@ mod tests {
         for id in ["table.selectTable", "table.deleteTable", "table.autofit"] {
             assert!(menu_enabled(&a, id), "{id} is on inside a table");
         }
+    }
+
+    /// A document with two tracked insertions, "new " at the start and " end" at the end, and the
+    /// caret on the first one.
+    fn two_tracked_insertions() -> WordApp {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.view.proofing = false;
+        s.author = "Ana".into();
+        s.run("document.setText", &json!({"text": "one two three"})).unwrap();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        s.run("caret.docStart", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": "new "})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": " end"})).unwrap();
+        s.run("caret.docStart", &json!({})).unwrap();
+        WordApp::new(s, crate::Services::default())
+    }
+
+    fn tracked_changes(app: &mut WordApp) -> usize {
+        app.session.run("review.changes", &json!({})).unwrap().as_array().map_or(0, Vec::len)
+    }
+
+    /// Review › Accept and Reject are split buttons: the icon half runs Accept and Move to Next
+    /// (Reject and Move to Next), and the label half opens the menu without resolving anything.
+    #[test]
+    fn accept_and_reject_buttons_move_to_the_next_change() {
+        use egui_kittest::kittest::Queryable;
+        for (verb, text) in [("Accept", "new one two three end"), ("Reject", "one two three end")] {
+            let mut app = two_tracked_insertions();
+            app.run("ui.tab", json!({"tab": "Review"})).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(2560.0, 900.0)).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
+            h.run_steps(3);
+            h.get_by_label(&format!("{verb} and Move to Next")).click();
+            h.run_steps(3);
+            assert_eq!(tracked_changes(h.state_mut()), 1, "{verb}: the first insertion is resolved");
+            let doc = &h.state().session.doc;
+            assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body), text, "{verb}");
+            let (a, b) = h.state().session.sel.ordered();
+            let end = text.len();
+            assert_eq!((a.off, b.off), (end - 4, end), "{verb}: the insertion at the end is selected");
+
+            h.get_by_label(verb).click();
+            h.run_steps(3);
+            assert!(h.query_by_label_contains(&format!("{verb} All Changes and Stop Tracking")).is_some(), "{verb}: the menu opens");
+            assert_eq!(tracked_changes(h.state_mut()), 1, "{verb}: opening the menu resolves nothing");
+        }
+    }
+
+    /// Home › Paste is a split button: the icon half pastes, and the label half opens the paste
+    /// options without pasting.
+    #[test]
+    fn paste_button_pastes_and_its_arrow_opens_the_options() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Copy me")), crate::Services::default());
+        app.run("select.text", json!({"text": "Copy"})).unwrap();
+        app.run("edit.copy", json!({})).unwrap();
+        app.run("caret.docEnd", json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(2560.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        h.get_by_label(tl!("Paste (⌘V)")).click();
+        h.run_steps(3);
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Copy meCopy");
+        h.get_by_label(tl!("Paste")).click();
+        h.run_steps(3);
+        assert!(h.query_by_label_contains("Keep Text Only").is_some(), "the menu opens");
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Copy meCopy", "opening the menu pastes nothing");
     }
 
     /// #1206: Margins, Orientation, Size and Columns mark the caret section's setting, as Word

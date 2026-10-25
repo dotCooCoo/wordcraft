@@ -140,6 +140,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-10-25: Review › Accept and Reject and Home › Paste are split buttons: a click on the icon runs Accept and Move to Next, Reject and Move to Next or Paste, and a click on the label opens the menu. Before, a click anywhere on these buttons only opened the menu.
 - 2026-10-25: Interface catalogs are still the shared storytold/craft-i18n ones embedded from `craft-i18n.rev` (`9205108c…`): 27 WordCraft languages with English fallback for missing strings, and the equation “Delete Around Caret in Equation” translation preserved. Native-speaker review remains human.
 - 2026-10-25: Input methods (egui 0.37): character- and byte-counted surrounding deletions, a fresh composition after body/equation replacement, rejection of queued stale replacements before mutation, transactional equation deletes and one undo group, with tracked and placeholder length mapping. Synthetic regressions document these paths; managed CI passed, and native IME acceptance (#155–#164) plus browser IME behavior remain open.
 - 2026-10-25: Text Highlight Color shows the last colour as the button's bar in the ribbon and mini toolbar; after No Color it shows the pen without a misleading yellow bar, and the button removes highlighting (#4087).
@@ -637,6 +638,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | trivial | Progress log: Accept, Reject and Paste are split buttons |
 | 2026-10-25 | trivial | Progress log: egui 0.37 migration records the `craft-i18n.rev` catalog pin (9205108…; 27 languages) and the input-method handling; managed CI passed; native acceptance and native-speaker review remain open |
 | 2026-10-17 | trivial | Progress log: Standard-encrypted (AES) Word files open (gap 9) |
 | 2026-10-25 | trivial | Progress log: Text Highlight Color buttons show the remembered colour, or no colour bar after No Color (#4087) |
