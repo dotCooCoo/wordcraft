@@ -127,6 +127,20 @@ pub(crate) fn canonical(_path: &std::path::Path) -> Option<std::path::PathBuf> {
     None
 }
 
+/// The size in bytes of the regular file at `path`, for the FILESIZE field; `None` when the path
+/// is outside the allowed roots or is not a regular file that can be read.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn file_size(path: &std::path::Path) -> Option<u64> {
+    crate::file_access::check_read(&path.to_string_lossy()).ok()?;
+    std::fs::metadata(path).ok().filter(std::fs::Metadata::is_file).map(|m| m.len())
+}
+
+/// [`file_size`]: on the web files come through the browser, never by path.
+#[cfg(target_arch = "wasm32")]
+pub fn file_size(_path: &std::path::Path) -> Option<u64> {
+    None
+}
+
 /// Can files with this extension be saved with a password (Word's packages)?
 pub fn can_encrypt(name: &str) -> bool {
     is_word_package(&ext_of(name))

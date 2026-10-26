@@ -1041,6 +1041,7 @@ pub const FIELDS: &[(&str, &str, &str)] = &[
     ("AUTHOR", "Document Information", "Who the document properties name as author"),
     ("COMMENTS", "Document Information", "Comments from the document properties"),
     ("FILENAME", "Document Information", "Name of the file this document is saved as"),
+    ("FILESIZE", "Document Information", "Size of the file this document is saved as"),
     ("KEYWORDS", "Document Information", "Keywords from the document properties"),
     ("LASTSAVEDBY", "Document Information", "Who last saved the document"),
     ("NUMCHARS", "Document Information", "How many characters the document holds"),
@@ -1048,6 +1049,7 @@ pub const FIELDS: &[(&str, &str, &str)] = &[
     ("NUMWORDS", "Document Information", "How many words the document holds"),
     ("REVNUM", "Document Information", "How many times the document has been saved"),
     ("SUBJECT", "Document Information", "Subject from the document properties"),
+    ("TEMPLATE", "Document Information", "Name of the template the document is attached to"),
     ("TITLE", "Document Information", "Title from the document properties"),
     ("PAGE", "Numbering", "Number of the page the field sits on"),
     ("SECTION", "Numbering", "Number of the section the field sits in"),
@@ -1110,7 +1112,7 @@ pub const NUMBER_FORMATS: &[(&str, &str)] = &[
 pub fn field_kind(name: &str) -> FieldKind {
     match name {
         "DATE" | "TIME" | "CREATEDATE" | "SAVEDATE" | "PRINTDATE" => FieldKind::Date,
-        "PAGE" | "NUMPAGES" | "SECTION" | "SECTIONPAGES" | "NUMWORDS" | "NUMCHARS" | "REVNUM" => FieldKind::Number,
+        "PAGE" | "NUMPAGES" | "SECTION" | "SECTIONPAGES" | "NUMWORDS" | "NUMCHARS" | "REVNUM" | "FILESIZE" => FieldKind::Number,
         "REF" | "PAGEREF" => FieldKind::Bookmark,
         "SEQ" => FieldKind::Sequence,
         "MERGEFIELD" => FieldKind::Merge,
@@ -1586,7 +1588,7 @@ mod tests {
     #[test]
     fn field_dialog_lists_the_document_information_fields() {
         let listed: Vec<&str> = FIELDS.iter().filter(|(_, cat, _)| *cat == "Document Information").map(|(n, _, _)| *n).collect();
-        for name in ["COMMENTS", "KEYWORDS", "LASTSAVEDBY", "NUMCHARS", "REVNUM", "SUBJECT"] {
+        for name in ["COMMENTS", "FILESIZE", "KEYWORDS", "LASTSAVEDBY", "NUMCHARS", "REVNUM", "SUBJECT", "TEMPLATE"] {
             assert!(listed.contains(&name), "{name} in {listed:?}");
         }
         let a = app();
@@ -1597,5 +1599,8 @@ mod tests {
         assert_eq!(f.instruction(), r"REVNUM \* ROMAN");
         f.select("SUBJECT");
         assert_eq!(f.instruction(), "SUBJECT");
+        f.select("FILESIZE");
+        f.number_format = "CardText".into();
+        assert_eq!(f.instruction(), r"FILESIZE \* CardText");
     }
 }

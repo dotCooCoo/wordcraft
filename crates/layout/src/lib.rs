@@ -617,7 +617,7 @@ fn hyphenation_key(doc: &Document) -> (bool, u32, bool, u32) {
 fn has_page_fields(p: &Paragraph) -> bool {
     p.objects.iter().any(|o| match o {
         InlineObject::Field { instr, .. } => {
-            matches!(fields::field_name(instr).as_str(), "PAGE" | "NUMPAGES" | "SECTIONPAGES" | "SECTION" | "PAGEREF")
+            matches!(fields::field_name(fields::info_target(instr)).as_str(), "PAGE" | "NUMPAGES" | "SECTIONPAGES" | "SECTION" | "PAGEREF")
         }
         _ => false,
     })
@@ -631,7 +631,7 @@ fn has_page_number_fields(p: &Paragraph) -> bool {
 /// Does `p` show a page total, which depends on how many pages the document has?
 fn has_total_fields(p: &Paragraph) -> bool {
     p.objects.iter().any(|o| match o {
-        InlineObject::Field { instr, .. } => matches!(fields::field_name(instr).as_str(), "NUMPAGES" | "SECTIONPAGES"),
+        InlineObject::Field { instr, .. } => matches!(fields::field_name(fields::info_target(instr)).as_str(), "NUMPAGES" | "SECTIONPAGES"),
         _ => false,
     })
 }

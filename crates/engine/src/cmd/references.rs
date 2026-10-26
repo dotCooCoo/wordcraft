@@ -977,9 +977,9 @@ fn has_switch(instr: &str, sw: char) -> bool {
 
 /// Update fields of the story being edited, as Word's F9 does: dates, REF/PAGEREF, the document
 /// information fields (TITLE, SUBJECT, AUTHOR, KEYWORDS, COMMENTS, LASTSAVEDBY, REVNUM, NUMWORDS,
-/// NUMCHARS, FILENAME, DOCPROPERTY) in the body, or in the header, footer, note or text box the
-/// caret is in (the body's fields stay as they are then). SEQ numbering, citations and TOC are
-/// body-only, so they run only when the caret is in the body.
+/// NUMCHARS, FILENAME, FILESIZE, TEMPLATE, INFO, DOCPROPERTY) in the body, or in the header,
+/// footer, note or text box the caret is in (the body's fields stay as they are then). SEQ
+/// numbering, citations and TOC are body-only, so they run only when the caret is in the body.
 pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
     update_fields_in(s, false)
 }
@@ -1020,6 +1020,8 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
         let mut updates: Vec<(usize, String)> = Vec::new();
         for (k, o) in p.objects.iter().enumerate() {
             let InlineObject::Field { instr, locked: false, .. } = o else { continue };
+            // `INFO Subject` updates as `SUBJECT` does.
+            let instr = wordcraft_layout::fields::info_target(instr);
             // A table formula reads the cells around its own cell again.
             if instr.trim_start().starts_with('=') {
                 if let Some((tp, r, c)) = path.cell()
@@ -1071,6 +1073,20 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     updates.push((k, count_text(instr, chars)));
                 }
                 "REVNUM" => updates.push((k, count_text(instr, core.revision as usize))),
+                // FILESIZE shows the saved file's size in bytes, `\k` in kilobytes and `\m` in
+                // megabytes; a document that has not been saved keeps its result.
+                "FILESIZE" => {
+                    if let Some(bytes) = saved_file_size(s) {
+                        updates.push((k, count_text(instr, file_size_in(instr, bytes))));
+                    }
+                }
+                // TEMPLATE shows the attached template's file name, and `\p` shows its path; without
+                // a template the result stays.
+                "TEMPLATE" => {
+                    if let Some(text) = template_text(&s.doc, s.path.as_deref(), has_switch(instr, 'p')) {
+                        updates.push((k, text_result(instr, text)));
+                    }
+                }
                 // DOCPROPERTY <name>: a custom property first, then a built-in one (#1798).
                 "DOCPROPERTY" => {
                     if let Some(name) = doc_property_arg(instr)
@@ -1186,6 +1202,37 @@ fn count_text(instr: &str, n: usize) -> String {
         .filter(|f| super::table_formula::number_format_covers(*f, n as f64))
         .unwrap_or(NumFormat::Decimal);
     wordcraft_layout::fields::field_number(instr, fmt, u32::try_from(n).unwrap_or(u32::MAX))
+}
+
+/// The size in bytes of the file the document is saved as; `None` before the first save, on the
+/// web, or when the file can't be read.
+fn saved_file_size(s: &Session) -> Option<u64> {
+    crate::io::file_size(s.path.as_deref()?)
+}
+
+/// A FILESIZE field's number: `bytes` rounded to the nearest megabyte (1,000,000 bytes) with
+/// `\m`, else to the nearest kilobyte (1,000 bytes) with `\k`, else the bytes.
+fn file_size_in(instr: &str, bytes: u64) -> usize {
+    let unit = if has_switch(instr, 'm') {
+        1_000_000
+    } else if has_switch(instr, 'k') {
+        1_000
+    } else {
+        1
+    };
+    usize::try_from(bytes.saturating_add(unit / 2) / unit).unwrap_or(usize::MAX)
+}
+
+/// A TEMPLATE field's text: the attached template's file name, or with `path` its path (a `file:`
+/// URL as a local path, a relative reference from the folder of `base`, the document's file).
+/// `None` when no template is attached.
+fn template_text(doc: &wordcraft_doc::Document, base: Option<&std::path::Path>, path: bool) -> Option<String> {
+    let target = doc.settings.attached_template.as_deref().map(str::trim).filter(|t| !t.is_empty())?;
+    let full = super::templates::local_path(target, base).map_or_else(|| target.to_string(), |p| p.to_string_lossy().to_string());
+    if path {
+        return Some(full);
+    }
+    Some(full.rsplit(['/', '\\']).next().unwrap_or(&full).to_string())
 }
 
 /// A field's computed text with its capitalization switches (`\* Upper`, `\* Lower`, `\* Caps`,
@@ -1623,6 +1670,88 @@ mod tests {
         assert_eq!(got, ["Draft", "Ada", "PLAN"]);
         let c = &s.doc.core;
         assert_eq!((c.subject.as_str(), c.creator.as_str(), c.title.as_str()), ("Draft", "Ada", "Plan"));
+    }
+
+    /// FILESIZE shows the saved file's size in bytes, `\k` in kilobytes and `\m` in megabytes,
+    /// rounded to whole numbers; a document never saved keeps the stored result.
+    #[test]
+    fn filesize_field_shows_the_saved_file_size() {
+        let codes = ["FILESIZE", r"FILESIZE \k", r"FILESIZE \m", r"FILESIZE \k \* CardText"];
+        let (mut s, hdr) = header_fields_session(wordcraft_doc::Document::from_text("one"), &codes);
+        s.run("references.updateFields", &json!({})).unwrap();
+        let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
+        assert_eq!(got, ["stale"; 4], "nothing saved yet");
+
+        let dir = std::env::temp_dir().join(format!("wordcraft-filesize-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("proposal.docx");
+        std::fs::write(&path, vec![0u8; 2_084_228]).unwrap();
+        s.path = Some(path.clone());
+        s.run("references.updateFields", &json!({})).unwrap();
+        let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
+        assert_eq!(got, ["2084228", "2084", "2", "two thousand eighty-four"]);
+
+        std::fs::write(&path, vec![0u8; 1_500]).unwrap();
+        s.run("references.updateFields", &json!({})).unwrap();
+        let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
+        assert_eq!(got[..3], ["1500", "2", "0"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// TEMPLATE shows the attached template's file name, and `\p` shows its path; a document
+    /// without one keeps the stored result.
+    #[test]
+    fn template_field_names_the_attached_template() {
+        let codes = ["TEMPLATE", r"TEMPLATE \p", r"TEMPLATE \* Upper"];
+        let (mut s, hdr) = header_fields_session(wordcraft_doc::Document::from_text("one"), &codes);
+        s.run("references.updateFields", &json!({})).unwrap();
+        let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
+        assert_eq!(got, ["stale"; 3], "no template attached");
+
+        s.doc.settings.attached_template = Some("file:///C:/Templates/RFP%20Project.dotx".into());
+        s.run("references.updateFields", &json!({})).unwrap();
+        let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
+        assert_eq!(got, ["RFP Project.dotx", "C:/Templates/RFP Project.dotx", "RFP PROJECT.DOTX"]);
+
+        s.doc.settings.attached_template = Some(r"D:\Shared\Letter.dotm".into());
+        s.run("references.updateFields", &json!({})).unwrap();
+        let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
+        assert_eq!(got[..2], ["Letter.dotm", r"D:\Shared\Letter.dotm"]);
+
+        // A relative reference is taken from the document's folder, as Update Styles reads it.
+        s.doc.settings.attached_template = Some("Report.dotx".into());
+        s.path = Some(std::path::PathBuf::from("/docs/Letter.docx"));
+        s.run("references.updateFields", &json!({})).unwrap();
+        let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
+        let full = std::path::Path::new("/docs").join("Report.dotx").to_string_lossy().to_string();
+        assert_eq!(got[..2], ["Report.dotx".to_string(), full]);
+    }
+
+    /// `INFO <type>` updates as the field it names, a new value included; INFO without a type, or
+    /// with one it doesn't stand for, keeps the stored result.
+    #[test]
+    fn info_fields_update_as_the_field_they_name() {
+        let mut doc = wordcraft_doc::Document::from_text("one two three");
+        doc.core.subject = "Budget".into();
+        doc.core.creator = "Grace".into();
+        doc.core.revision = 3;
+        doc.settings.attached_template = Some("Report.dotx".into());
+        let codes = [
+            "INFO Subject",
+            r#"INFO Author "Ada""#,
+            "AUTHOR",
+            r"info RevNum \* ROMAN",
+            "INFO NumWords",
+            r"INFO Template \* Upper",
+            "INFO",
+            "INFO Bogus",
+            "INFO Date",
+        ];
+        let (mut s, hdr) = header_fields_session(doc, &codes);
+        s.run("references.updateFields", &json!({})).unwrap();
+        let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
+        assert_eq!(got, ["Budget", "Ada", "Ada", "III", "3", "REPORT.DOTX", "stale", "stale", "stale"]);
+        assert_eq!(s.doc.core.creator, "Ada");
     }
 
     /// `\* Upper`, `\* Lower`, `\* Caps` and `\* FirstCap` apply to the text Update Field computes,
