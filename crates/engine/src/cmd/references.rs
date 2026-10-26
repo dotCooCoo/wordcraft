@@ -1194,18 +1194,23 @@ fn new_property_value(instr: &str) -> Option<String> {
     FieldCode::parse(instr).args.first().map(|a| a.chars().take(255).collect())
 }
 
-/// A count (NUMWORDS, NUMCHARS, REVNUM) in the field's `\*` number format, digits without one or
-/// when the format does not cover the count (see [`super::table_formula::number_format_covers`]),
-/// with the field's capitalization switches.
+/// A count (NUMWORDS, NUMCHARS, REVNUM, FILESIZE) in the field's `\*` number format, digits
+/// without one or when the format does not cover the count (see
+/// [`super::table_formula::number_format_covers`]), with the field's capitalization switches. A
+/// count above `u32::MAX` is written as digits.
 fn count_text(instr: &str, n: usize) -> String {
+    let Ok(small) = u32::try_from(n) else {
+        return wordcraft_layout::fields::apply_case_switch(instr, n.to_string());
+    };
     let fmt = wordcraft_layout::fields::format_switch(instr)
         .filter(|f| super::table_formula::number_format_covers(*f, n as f64))
         .unwrap_or(NumFormat::Decimal);
-    wordcraft_layout::fields::field_number(instr, fmt, u32::try_from(n).unwrap_or(u32::MAX))
+    wordcraft_layout::fields::field_number(instr, fmt, small)
 }
 
-/// The size in bytes of the file the document is saved as; `None` before the first save, on the
-/// web, or when the file can't be read.
+/// The size in bytes of the file the document is saved as, as the file system reports it; `None`
+/// before the first save, on the web, or when the path is outside the allowed folders or is not a
+/// regular file.
 fn saved_file_size(s: &Session) -> Option<u64> {
     crate::io::file_size(s.path.as_deref()?)
 }
@@ -1696,6 +1701,19 @@ mod tests {
         let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
         assert_eq!(got[..3], ["1500", "2", "0"]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A FILESIZE of 4 GiB or more shows every byte, with or without a `\*` format.
+    #[test]
+    fn filesize_counts_past_u32_show_in_full() {
+        let Ok(n) = usize::try_from(u64::from(u32::MAX) + 1) else {
+            return;
+        };
+        assert_eq!(count_text("FILESIZE", n), "4294967296");
+        assert_eq!(count_text(r"FILESIZE \* CardText", n), "4294967296");
+        assert_eq!(count_text(r"FILESIZE \* Hex", n), "4294967296");
+        assert_eq!(count_text("FILESIZE", file_size_in("FILESIZE", 5_000_000_000)), "5000000000");
+        assert_eq!(count_text(r"FILESIZE \k", file_size_in(r"FILESIZE \k", 5_000_000_000_000)), "5000000000");
     }
 
     /// TEMPLATE shows the attached template's file name, and `\p` shows its path; a document

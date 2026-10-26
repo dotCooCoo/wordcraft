@@ -127,8 +127,9 @@ pub(crate) fn canonical(_path: &std::path::Path) -> Option<std::path::PathBuf> {
     None
 }
 
-/// The size in bytes of the regular file at `path`, for the FILESIZE field; `None` when the path
-/// is outside the allowed roots or is not a regular file that can be read.
+/// The size in bytes of the regular file at `path` from its metadata, for the FILESIZE field;
+/// `None` when the path is outside the allowed roots, its metadata cannot be read, or it is not a
+/// regular file.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn file_size(path: &std::path::Path) -> Option<u64> {
     crate::file_access::check_read(&path.to_string_lossy()).ok()?;
