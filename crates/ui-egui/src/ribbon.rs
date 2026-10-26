@@ -1105,7 +1105,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
     let st = app.session.run("format.state", &json!({})).unwrap_or_default();
     let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
     group(ui, "Clipboard", Some("edit.clipboardPane"), app, |ui, app| {
-        big_split(ui, app, "paste", "Paste", "Paste (⌘V)", "edit.paste", json!({}), |ui, app| {
+        big_split(ui, app, "paste", "Paste", "Paste", "edit.paste", json!({}), |ui, app| {
             mi(ui, app, "Paste", "edit.paste", json!({}));
             mi(ui, app, "Keep Text Only", "edit.pasteText", json!({}));
             mi(ui, app, "Merge Formatting", "edit.pasteMerge", json!({}));
@@ -3354,7 +3354,7 @@ mod tests {
             let end = text.len();
             assert_eq!((a.off, b.off), (end - 4, end), "{verb}: the insertion at the end is selected");
 
-            h.get_by_label(verb).click();
+            h.get_by_label(&format!("{verb} options")).click();
             h.run_steps(3);
             assert!(h.query_by_label_contains(&format!("{verb} All Changes and Stop Tracking")).is_some(), "{verb}: the menu opens");
             assert_eq!(tracked_changes(h.state_mut()), 1, "{verb}: opening the menu resolves nothing");
@@ -3379,10 +3379,16 @@ mod tests {
             app,
         );
         h.run_steps(3);
-        h.get_by_label(tl!("Paste (⌘V)")).click();
+        // The icon half is named "Paste"; its tooltip adds the platform's key (Ctrl+V, or ⌘V on
+        // macOS).
+        h.get_by_label(tl!("Paste")).hover();
+        h.run_steps(60);
+        let key = crate::widgets::shortcut_text(h.state(), "edit.paste");
+        assert!(h.query_by_label(&format!("{} ({key})", tl!("Paste"))).is_some(), "the tooltip names {key}");
+        h.get_by_label(tl!("Paste")).click();
         h.run_steps(3);
         assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Copy meCopy");
-        h.get_by_label(tl!("Paste")).click();
+        h.get_by_label(&crate::i18n::fmt(tl!("{name} options"), &[("name", tl!("Paste"))])).click();
         h.run_steps(3);
         assert!(h.query_by_label_contains("Keep Text Only").is_some(), "the menu opens");
         assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Copy meCopy", "opening the menu pastes nothing");

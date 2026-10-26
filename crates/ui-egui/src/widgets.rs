@@ -412,7 +412,8 @@ pub fn menu_button(
 }
 
 /// A large split button: the icon half runs `id` with `params` and is named `tip`; the label
-/// half, with the drop-down marker, opens a menu filled by `menu` and is named after the label.
+/// half, with the drop-down marker, opens a menu filled by `menu` and is named "{label} options",
+/// as [`split`]'s arrow is.
 #[allow(clippy::too_many_arguments)]
 pub fn big_split(
     ui: &mut Ui,
@@ -452,7 +453,7 @@ pub fn big_split(
     if resp.clicked() && on {
         run_from_ribbon(app, id, params);
     }
-    let name = label.replace('\n', " ");
+    let name = crate::i18n::fmt(tl!("{name} options"), &[("name", label.replace('\n', " ").as_str())]);
     let reason = if on { None } else { Some(app.session.why_disabled(id).unwrap_or("")) };
     let (title, notes) = tooltip_lines(&name, "", "", reason);
     show_hint(&aresp, &title, &notes);
