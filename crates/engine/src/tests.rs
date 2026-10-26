@@ -2116,6 +2116,9 @@ fn reading_proofing_exceptions_is_side_effect_free() {
     assert_eq!(run(&mut s, "file.proofing", json!({})), json!({"hideSpellingErrors": false, "hideGrammarErrors": false}));
     assert!(s.run("file.proofingExceptions", &json!({})).is_err());
     assert!(s.run("file.proofingExceptions", &json!({"hideSpellingErrors": "yes"})).is_err());
+    // A malformed field refuses the whole call: the valid one beside it is not applied.
+    assert!(s.run("file.proofingExceptions", &json!({"hideSpellingErrors": true, "hideGrammarErrors": "yes"})).is_err());
+    assert!(!s.doc.settings.hide_spelling_errors);
     assert_eq!(s.undo_depth(), undo, "no undo step");
     assert!(!s.dirty, "no unsaved changes");
 }
@@ -3155,6 +3158,9 @@ fn reading_privacy_options_is_side_effect_free() {
     assert_eq!(run(&mut s, "file.privacy", json!({})), json!({"removePersonalInfo": false, "removeDateTime": false}));
     assert!(s.run("file.privacyOptions", &json!({})).is_err());
     assert!(s.run("file.privacyOptions", &json!({"removePersonalInfo": "yes"})).is_err());
+    // A malformed field refuses the whole call: the valid one beside it is not applied.
+    assert!(s.run("file.privacyOptions", &json!({"removePersonalInfo": true, "removeDateTime": "yes"})).is_err());
+    assert!(!s.doc.settings.remove_personal_info);
     assert_eq!(s.undo_depth(), undo, "no undo step");
     assert!(!s.dirty, "no unsaved changes");
     s.doc.settings.protection = Some("readOnly".into());

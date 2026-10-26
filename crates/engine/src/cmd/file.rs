@@ -157,8 +157,8 @@ pub fn specs() -> Vec<CommandSpec> {
         // Changing them is a document change (undoable, refused on a protected document); reading
         // them is `file.privacy`, which changes nothing.
         CommandSpec::new("file.privacyOptions", "Privacy Options", "File › Options › Save", |s, v| {
-            let personal = p::bool(v, "removePersonalInfo");
-            let date_time = p::bool(v, "removeDateTime");
+            let personal = super::options::bool_param(v, "removePersonalInfo")?;
+            let date_time = super::options::bool_param(v, "removeDateTime")?;
             if personal.is_none() && date_time.is_none() {
                 return Err(CmdError::Params("give removePersonalInfo or removeDateTime (file.privacy reads them)".into()));
             }
@@ -179,8 +179,8 @@ pub fn specs() -> Vec<CommandSpec> {
         // Spelling & Grammar and `review.issues` still find the errors. Changing them is a
         // document change, as the privacy options are; reading them is `file.proofing`.
         CommandSpec::new("file.proofingExceptions", "Proofing Exceptions", "File › Options › Proofing", |s, v| {
-            let spelling = p::bool(v, "hideSpellingErrors");
-            let grammar = p::bool(v, "hideGrammarErrors");
+            let spelling = super::options::bool_param(v, "hideSpellingErrors")?;
+            let grammar = super::options::bool_param(v, "hideGrammarErrors")?;
             if spelling.is_none() && grammar.is_none() {
                 return Err(CmdError::Params("give hideSpellingErrors or hideGrammarErrors (file.proofing reads them)".into()));
             }
