@@ -318,14 +318,17 @@ fn proofing(app: &mut WordApp, ui: &mut Ui) {
         ("Hide spelling errors in this document only", "hideSpellingErrors", settings.hide_spelling_errors),
         ("Hide grammar errors in this document only", "hideGrammarErrors", settings.hide_grammar_errors),
     ];
-    for (label, key, value) in rows {
-        let mut v = value;
-        if ui.checkbox(&mut v, tl!(label)).changed()
-            && let Err(e) = app.run("file.proofingExceptions", json!({ key: v }))
-        {
-            app.status(e);
+    // Off on the Start screen, where no document takes the setting.
+    ui.add_enabled_ui(app.has_document(), |ui| {
+        for (label, key, value) in rows {
+            let mut v = value;
+            if ui.checkbox(&mut v, tl!(label)).changed()
+                && let Err(e) = app.run("file.proofingExceptions", json!({ key: v }))
+            {
+                app.status(e);
+            }
         }
-    }
+    });
     ui.add_space(8.0);
     section(ui, "Custom dictionary");
     custom_dictionary(app, ui);
@@ -474,14 +477,17 @@ fn save(app: &mut WordApp, ui: &mut Ui) {
         ("Remove my name from comments, changes and file properties when saving", "removePersonalInfo", settings.remove_personal_info),
         ("Leave out the date and time of comments and tracked changes when saving", "removeDateTime", settings.remove_date_time),
     ];
-    for (label, key, value) in rows {
-        let mut v = value;
-        if ui.checkbox(&mut v, tl!(label)).changed()
-            && let Err(e) = app.run("file.privacyOptions", json!({ key: v }))
-        {
-            app.status(e);
+    // Off on the Start screen, where no document takes the setting.
+    ui.add_enabled_ui(app.has_document(), |ui| {
+        for (label, key, value) in rows {
+            let mut v = value;
+            if ui.checkbox(&mut v, tl!(label)).changed()
+                && let Err(e) = app.run("file.privacyOptions", json!({ key: v }))
+            {
+                app.status(e);
+            }
         }
-    }
+    });
     note(ui, "The document you are editing keeps the names and dates; only the saved file leaves them out.");
 }
 
@@ -1201,6 +1207,40 @@ mod tests {
         h.get_by_label("Hide spelling errors in this document only").click();
         h.run_steps(4);
         assert!(!h.state().session.doc.settings.hide_spelling_errors, "and off again");
+    }
+
+    /// On the Start screen no document is open, so the document's own checkboxes on the Proofing
+    /// and Save panes are off.
+    #[test]
+    fn document_checkboxes_are_off_on_the_start_screen() {
+        let panes = [
+            ("proofing", ["Hide spelling errors in this document only", "Hide grammar errors in this document only"]),
+            (
+                "save",
+                [
+                    "Remove my name from comments, changes and file properties when saving",
+                    "Leave out the date and time of comments and tracked changes when saving",
+                ],
+            ),
+        ];
+        for (pane, labels) in panes {
+            let mut a = app();
+            assert!(a.start_screen() && !a.has_document());
+            a.run("file.options", json!({"pane": pane})).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                a,
+            );
+            h.run_steps(4);
+            for label in labels {
+                let checkbox = h.get_by_role_and_label(egui::accesskit::Role::CheckBox, label);
+                assert!(checkbox.accesskit_node().is_disabled(), "{pane}: {label}");
+            }
+        }
     }
 
     /// File › Options › Accessibility › Animation effects: Use system setting (the default), On
