@@ -429,6 +429,12 @@ fn template_field_names_the_attached_template() {
     let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
     assert_eq!(got[..2], ["Letter.dotm", r"D:\Shared\Letter.dotm"]);
 
+    // A `file:` URL on another machine is shown decoded, without being opened.
+    s.doc.settings.attached_template = Some("file://server/share/Report%20Template.dotx".into());
+    s.run("references.updateFields", &json!({})).unwrap();
+    let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
+    assert_eq!(got[..2], ["Report Template.dotx", "//server/share/Report Template.dotx"]);
+
     // A relative reference is taken from the document's folder, as Update Styles reads it.
     s.doc.settings.attached_template = Some("Report.dotx".into());
     s.path = Some(std::path::PathBuf::from("/docs/Letter.docx"));

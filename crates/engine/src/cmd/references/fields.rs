@@ -163,10 +163,17 @@ pub(super) fn file_size_in(instr: &str, bytes: u64) -> usize {
 
 /// A TEMPLATE field's text: the attached template's file name, or with `path` its path (a `file:`
 /// URL as a local path, a relative reference from the folder of `base`, the document's file).
-/// `None` when no template is attached.
+/// A `file:` URL that names another machine (`file://server/share/T.dotx`) is shown decoded
+/// (`//server/share/T.dotx`) and is never opened. `None` when no template is attached.
 fn template_text(doc: &wordcraft_doc::Document, base: Option<&std::path::Path>, path: bool) -> Option<String> {
     let target = doc.settings.attached_template.as_deref().map(str::trim).filter(|t| !t.is_empty())?;
-    let full = crate::cmd::templates::local_path(target, base).map_or_else(|| target.to_string(), |p| p.to_string_lossy().to_string());
+    let full = match crate::cmd::templates::local_path(target, base) {
+        Some(p) => p.to_string_lossy().to_string(),
+        None => match (target.get(..5), target.get(5..)) {
+            (Some(scheme), Some(rest)) if scheme.eq_ignore_ascii_case("file:") => crate::cmd::templates::percent_decode(rest),
+            _ => target.to_string(),
+        },
+    };
     if path {
         return Some(full);
     }
