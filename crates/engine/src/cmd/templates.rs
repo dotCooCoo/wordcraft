@@ -266,7 +266,7 @@ pub(crate) fn is_network_path(p: &str) -> bool {
     sep(b.first()) && sep(b.get(1))
 }
 
-fn is_windows_absolute(p: &str) -> bool {
+pub(crate) fn is_windows_absolute(p: &str) -> bool {
     let b = p.as_bytes();
     p.starts_with("\\\\") || (b.first().is_some_and(u8::is_ascii_alphabetic) && b.get(1) == Some(&b':'))
 }

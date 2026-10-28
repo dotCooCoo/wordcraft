@@ -442,6 +442,16 @@ fn template_field_names_the_attached_template() {
     let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
     let full = std::path::Path::new("/docs").join("Report.dotx").to_string_lossy().to_string();
     assert_eq!(got[..2], ["Report.dotx".to_string(), full]);
+
+    // A relative reference in a document on another machine is shown from that document's folder.
+    let doc = std::path::PathBuf::from("//server/share/Letter.docx");
+    let full = doc.parent().map(|d| d.join("Report.dotx").to_string_lossy().to_string());
+    s.path = Some(doc);
+    s.run("references.updateFields", &json!({})).unwrap();
+    let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
+    let full = full.unwrap_or_default();
+    assert!(full.starts_with("//server/share"), "{full}");
+    assert_eq!(got[..2], ["Report.dotx".to_string(), full]);
 }
 
 /// `INFO <type>` updates as the field it names, a new value included; INFO without a type, or

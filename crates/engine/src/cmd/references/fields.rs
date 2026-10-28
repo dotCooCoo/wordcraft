@@ -164,15 +164,29 @@ pub(super) fn file_size_in(instr: &str, bytes: u64) -> usize {
 /// A TEMPLATE field's text: the attached template's file name, or with `path` its path (a `file:`
 /// URL as a local path, a relative reference from the folder of `base`, the document's file).
 /// A `file:` URL that names another machine (`file://server/share/T.dotx`) is shown decoded
-/// (`//server/share/T.dotx`) and is never opened. `None` when no template is attached.
+/// (`//server/share/T.dotx`) and is never opened. A relative reference in a document on another
+/// machine is shown from that document's folder and is never opened either. `None` when no
+/// template is attached.
 fn template_text(doc: &wordcraft_doc::Document, base: Option<&std::path::Path>, path: bool) -> Option<String> {
+    use crate::cmd::templates::{is_network_path, is_windows_absolute, local_path, percent_decode};
     let target = doc.settings.attached_template.as_deref().map(str::trim).filter(|t| !t.is_empty())?;
-    let full = match crate::cmd::templates::local_path(target, base) {
+    let full = match local_path(target, base) {
         Some(p) => p.to_string_lossy().to_string(),
-        None => match (target.get(..5), target.get(5..)) {
-            (Some(scheme), Some(rest)) if scheme.eq_ignore_ascii_case("file:") => crate::cmd::templates::percent_decode(rest),
-            _ => target.to_string(),
-        },
+        None => {
+            let shown = match (target.get(..5), target.get(5..)) {
+                (Some(scheme), Some(rest)) if scheme.eq_ignore_ascii_case("file:") => percent_decode(rest),
+                _ => target.to_string(),
+            };
+            let relative = !shown.is_empty()
+                && !shown.contains("://")
+                && !is_network_path(&shown)
+                && !is_windows_absolute(&shown)
+                && std::path::Path::new(&shown).is_relative();
+            match base.and_then(std::path::Path::parent) {
+                Some(dir) if relative => dir.join(&shown).to_string_lossy().to_string(),
+                _ => shown,
+            }
+        }
     };
     if path {
         return Some(full);
