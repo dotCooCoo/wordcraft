@@ -293,9 +293,10 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                 }
                 "REVNUM" => updates.push((k, count_text(instr, core.revision as usize))),
                 // FILESIZE shows the saved file's size in bytes, `\k` in kilobytes and `\m` in
-                // megabytes; a document that has not been saved keeps its result.
+                // megabytes, and 0 in a document that has never been saved.
                 "FILESIZE" => {
-                    if let Some(bytes) = saved_file_size(s) {
+                    let never_saved = s.path.is_none() && s.file_name.is_none();
+                    if let Some(bytes) = if never_saved { Some(0) } else { saved_file_size(s) } {
                         updates.push((k, count_text(instr, file_size_in(instr, bytes))));
                     }
                 }
@@ -319,6 +320,7 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     let text = if has_switch(instr, 'p') { fn_path } else { fn_name };
                     updates.push((k, text_result(instr, text)));
                 }
+                "INFO" if wordcraft_layout::fields::info_type_unknown(instr) => updates.push((k, "Error! Unknown info keyword.".into())),
                 _ => {}
             }
         }

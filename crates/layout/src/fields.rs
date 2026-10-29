@@ -116,6 +116,21 @@ pub fn info_target(instr: &str) -> &str {
     if head.eq_ignore_ascii_case("INFO") && INFO_TYPES.contains(&field_name(rest).as_str()) { rest } else { instr }
 }
 
+/// The `INFO` types that keep their stored result: the date and editing-time properties.
+pub const INFO_KEPT_TYPES: &[&str] = &["CREATEDATE", "EDITTIME", "PRINTDATE", "SAVEDATE"];
+
+/// Whether `instr` is an `INFO` field without a type, or with a type that is in neither
+/// [`INFO_TYPES`] nor [`INFO_KEPT_TYPES`] (`INFO`, `INFO Bogus`).
+pub fn info_type_unknown(instr: &str) -> bool {
+    let instr = instr.trim_start();
+    let (head, rest) = instr.split_once(char::is_whitespace).unwrap_or((instr, ""));
+    if !head.eq_ignore_ascii_case("INFO") {
+        return false;
+    }
+    let ty = field_name(rest.trim_start());
+    !INFO_TYPES.contains(&ty.as_str()) && !INFO_KEPT_TYPES.contains(&ty.as_str())
+}
+
 /// REF's hyperlink switch links its cached result without updating that result.
 pub(crate) fn reference_link(instr: &str) -> Option<String> {
     let (name, args) = instr.trim_start().split_once(char::is_whitespace)?;

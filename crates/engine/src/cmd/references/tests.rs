@@ -371,14 +371,20 @@ fn summary_fields_take_one_word_without_quotes() {
 }
 
 /// FILESIZE shows the saved file's size in bytes, `\k` in kilobytes and `\m` in megabytes,
-/// rounded to whole numbers; a document never saved keeps the stored result.
+/// rounded to whole numbers, and 0 in a document never saved; a document named but not saved
+/// keeps the stored result.
 #[test]
 fn filesize_field_shows_the_saved_file_size() {
     let codes = ["FILESIZE", r"FILESIZE \k", r"FILESIZE \m", r"FILESIZE \k \* CardText"];
     let (mut s, hdr) = header_fields_session(wordcraft_doc::Document::from_text("one"), &codes);
+    s.file_name = Some("proposal.docx".into());
     s.run("references.updateFields", &json!({})).unwrap();
     let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
-    assert_eq!(got, ["stale"; 4], "nothing saved yet");
+    assert_eq!(got, ["stale"; 4], "a name without a saved file");
+    s.file_name = None;
+    s.run("references.updateFields", &json!({})).unwrap();
+    let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
+    assert_eq!(got, ["0", "0", "0", "zero"], "never saved");
 
     let dir = std::env::temp_dir().join(format!("wordcraft-filesize-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
@@ -455,7 +461,7 @@ fn template_field_names_the_attached_template() {
 }
 
 /// `INFO <type>` updates as the field it names, a new value included; INFO without a type, or
-/// with one it doesn't stand for, keeps the stored result.
+/// with an unknown one, shows an error, and `INFO EditTime` keeps the stored result.
 #[test]
 fn info_fields_update_as_the_field_they_name() {
     let mut doc = wordcraft_doc::Document::from_text("one two three");
@@ -473,11 +479,13 @@ fn info_fields_update_as_the_field_they_name() {
         "INFO",
         "INFO Bogus",
         "INFO Date",
+        "INFO EditTime",
     ];
     let (mut s, hdr) = header_fields_session(doc, &codes);
     s.run("references.updateFields", &json!({})).unwrap();
     let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
-    assert_eq!(got, ["Budget", "Ada", "Ada", "III", "3", "REPORT.DOTX", "stale", "stale", "stale"]);
+    let unknown = "Error! Unknown info keyword.";
+    assert_eq!(got, ["Budget", "Ada", "Ada", "III", "3", "REPORT.DOTX", unknown, unknown, unknown, "stale"]);
     assert_eq!(s.doc.core.creator, "Ada");
 }
 
