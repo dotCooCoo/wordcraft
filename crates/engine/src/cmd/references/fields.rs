@@ -153,7 +153,7 @@ fn saved_file_size(s: &Session) -> Option<u64> {
 
 /// A FILESIZE field's number: `bytes` rounded to the nearest megabyte (1,000,000 bytes) with
 /// `\m`, else to the nearest kilobyte (1,000 bytes) with `\k`, else the bytes.
-pub(super) fn file_size_in(instr: &str, bytes: u64) -> usize {
+pub(super) fn file_size_in(instr: &str, bytes: u64) -> u64 {
     let unit = if has_switch(instr, 'm') {
         1_000_000
     } else if has_switch(instr, 'k') {
@@ -161,7 +161,7 @@ pub(super) fn file_size_in(instr: &str, bytes: u64) -> usize {
     } else {
         1
     };
-    usize::try_from(bytes.saturating_add(unit / 2) / unit).unwrap_or(usize::MAX)
+    bytes.saturating_add(unit / 2) / unit
 }
 
 /// A TEMPLATE field's text: the attached template's file name, or with `path` its path (a `file:`
@@ -299,12 +299,12 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     updates.push((k, text_result(instr, summary_property(&core, &name).to_string())));
                 }
                 "LASTSAVEDBY" => updates.push((k, text_result(instr, core.last_modified_by.clone()))),
-                "NUMWORDS" => updates.push((k, count_text(instr, s.doc.word_count()))),
+                "NUMWORDS" => updates.push((k, count_text(instr, u64::try_from(s.doc.word_count()).unwrap_or(u64::MAX)))),
                 "NUMCHARS" => {
                     let chars = s.doc.plain_text(StoryRef::Body).chars().filter(|c| !c.is_whitespace()).count();
-                    updates.push((k, count_text(instr, chars)));
+                    updates.push((k, count_text(instr, u64::try_from(chars).unwrap_or(u64::MAX))));
                 }
-                "REVNUM" => updates.push((k, count_text(instr, core.revision as usize))),
+                "REVNUM" => updates.push((k, count_text(instr, u64::from(core.revision)))),
                 // FILESIZE shows the saved file's size in bytes, `\k` in kilobytes and `\m` in
                 // megabytes, and 0 in a document that has never been saved.
                 "FILESIZE" => {

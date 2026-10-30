@@ -34,7 +34,7 @@ pub(super) fn new_property_value(instr: &str) -> Option<String> {
 /// without one or when the format does not cover the count (see
 /// [`super::table_formula::number_format_covers`]), with the field's capitalization switches. A
 /// count above `u32::MAX` is written as digits.
-pub(super) fn count_text(instr: &str, n: usize) -> String {
+pub(super) fn count_text(instr: &str, n: u64) -> String {
     let Ok(small) = u32::try_from(n) else {
         return wordcraft_layout::fields::apply_case_switch(instr, n.to_string());
     };

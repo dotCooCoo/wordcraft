@@ -405,12 +405,13 @@ fn filesize_field_shows_the_saved_file_size() {
 /// A FILESIZE of 4 GiB or more shows every byte, with or without a `\*` format.
 #[test]
 fn filesize_counts_past_u32_show_in_full() {
-    let Ok(n) = usize::try_from(u64::from(u32::MAX) + 1) else {
-        return;
-    };
+    let n: u64 = u64::from(u32::MAX) + 1;
     assert_eq!(count_text("FILESIZE", n), "4294967296");
     assert_eq!(count_text(r"FILESIZE \* CardText", n), "4294967296");
     assert_eq!(count_text(r"FILESIZE \* Hex", n), "4294967296");
+    let bytes: u64 = file_size_in("FILESIZE", 5_000_000_000_000);
+    assert_eq!(bytes, 5_000_000_000_000);
+    assert_eq!(count_text("FILESIZE", 5_000_000_000_000u64), "5000000000000");
     assert_eq!(count_text("FILESIZE", file_size_in("FILESIZE", 5_000_000_000)), "5000000000");
     assert_eq!(count_text(r"FILESIZE \k", file_size_in(r"FILESIZE \k", 5_000_000_000_000)), "5000000000");
 }
