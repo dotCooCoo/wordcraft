@@ -166,13 +166,23 @@ pub(super) fn file_size_in(instr: &str, bytes: u64) -> usize {
 
 /// A TEMPLATE field's text: the attached template's file name, or with `path` its path (a `file:`
 /// URL as a local path, a relative reference from the folder of `base`, the document's file).
+/// Without an attached template, the name is `Normal.dotm`; `path` uses the configured user
+/// templates folder when available.
 /// A `file:` URL that names another machine (`file://server/share/T.dotx`) is shown decoded
 /// (`//server/share/T.dotx`) and is never opened. A relative reference in a document on another
-/// machine is shown from that document's folder and is never opened either. `None` when no
-/// template is attached.
-fn template_text(doc: &wordcraft_doc::Document, base: Option<&std::path::Path>, path: bool) -> Option<String> {
+/// machine is shown from that document's folder and is never opened either.
+fn template_text(doc: &wordcraft_doc::Document, base: Option<&std::path::Path>, path: bool, user_templates_folder: Option<&str>) -> String {
     use crate::cmd::templates::{is_network_path, is_windows_absolute, local_path, percent_decode};
-    let target = doc.settings.attached_template.as_deref().map(str::trim).filter(|t| !t.is_empty())?;
+    let Some(target) = doc.settings.attached_template.as_deref().map(str::trim).filter(|t| !t.is_empty()) else {
+        return if path {
+            user_templates_folder
+                .filter(|folder| !folder.trim().is_empty())
+                .map(|folder| std::path::Path::new(folder).join("Normal.dotm").to_string_lossy().to_string())
+                .unwrap_or_else(|| "Normal.dotm".to_string())
+        } else {
+            "Normal.dotm".to_string()
+        };
+    };
     let full = match local_path(target, base) {
         Some(p) => p.to_string_lossy().to_string(),
         None => {
@@ -192,9 +202,9 @@ fn template_text(doc: &wordcraft_doc::Document, base: Option<&std::path::Path>, 
         }
     };
     if path {
-        return Some(full);
+        return full;
     }
-    Some(full.rsplit(['/', '\\']).next().unwrap_or(&full).to_string())
+    full.rsplit(['/', '\\']).next().unwrap_or(&full).to_string()
 }
 
 /// Update fields of the story being edited, as Word's F9 does: dates, REF/PAGEREF, the document
@@ -303,12 +313,11 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                         updates.push((k, count_text(instr, file_size_in(instr, bytes))));
                     }
                 }
-                // TEMPLATE shows the attached template's file name, and `\p` shows its path; without
-                // a template the result stays.
+                // TEMPLATE shows the attached template's file name, or Normal.dotm when absent.
+                // `\p` includes the path when one is known.
                 "TEMPLATE" => {
-                    if let Some(text) = template_text(&s.doc, s.path.as_deref(), has_switch(instr, 'p')) {
-                        updates.push((k, text_result(instr, text)));
-                    }
+                    let text = template_text(&s.doc, s.path.as_deref(), has_switch(instr, 'p'), s.prefs.user_templates_folder.as_deref());
+                    updates.push((k, text_result(instr, text)));
                 }
                 // DOCPROPERTY <name>: a custom property first, then a built-in one (#1798).
                 "DOCPROPERTY" => {

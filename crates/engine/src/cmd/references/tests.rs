@@ -415,20 +415,26 @@ fn filesize_counts_past_u32_show_in_full() {
     assert_eq!(count_text(r"FILESIZE \k", file_size_in(r"FILESIZE \k", 5_000_000_000_000)), "5000000000");
 }
 
-/// TEMPLATE shows the attached template's file name, and `\p` shows its path; a document
-/// without one keeps the stored result.
+/// TEMPLATE shows the attached template's file name, and `\p` shows its path. Without an
+/// attached template, the name is Normal.dotm.
 #[test]
 fn template_field_names_the_attached_template() {
-    let codes = ["TEMPLATE", r"TEMPLATE \p", r"TEMPLATE \* Upper"];
+    let codes = ["TEMPLATE", r"TEMPLATE \p", r"TEMPLATE \* Upper", "INFO Template", r"INFO Template \p"];
     let (mut s, hdr) = header_fields_session(wordcraft_doc::Document::from_text("one"), &codes);
     s.run("references.updateFields", &json!({})).unwrap();
     let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
-    assert_eq!(got, ["stale"; 3], "no template attached");
+    assert_eq!(got, ["Normal.dotm", "Normal.dotm", "NORMAL.DOTM", "Normal.dotm", "Normal.dotm"], "no template attached");
+
+    s.prefs.user_templates_folder = Some("/user/templates".into());
+    s.run("references.updateFields", &json!({})).unwrap();
+    let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
+    let normal_path = std::path::Path::new("/user/templates").join("Normal.dotm").to_string_lossy().to_string();
+    assert_eq!(got, ["Normal.dotm", &normal_path, "NORMAL.DOTM", "Normal.dotm", &normal_path]);
 
     s.doc.settings.attached_template = Some("file:///C:/Templates/RFP%20Project.dotx".into());
     s.run("references.updateFields", &json!({})).unwrap();
     let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
-    assert_eq!(got, ["RFP Project.dotx", "C:/Templates/RFP Project.dotx", "RFP PROJECT.DOTX"]);
+    assert_eq!(got, ["RFP Project.dotx", "C:/Templates/RFP Project.dotx", "RFP PROJECT.DOTX", "RFP Project.dotx", "C:/Templates/RFP Project.dotx"]);
 
     s.doc.settings.attached_template = Some(r"D:\Shared\Letter.dotm".into());
     s.run("references.updateFields", &json!({})).unwrap();
