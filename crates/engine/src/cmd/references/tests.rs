@@ -402,6 +402,39 @@ fn filesize_field_shows_the_saved_file_size() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn filesize_field_ignores_the_path_of_a_data_open_until_save() {
+    let mut source = wordcraft_doc::Document::from_text("one");
+    source
+        .para_mut(StoryRef::Body, &wordcraft_doc::Path(vec![0]))
+        .unwrap()
+        .insert_object(
+            0,
+            InlineObject::Field { instr: "FILESIZE".into(), result: "stale".into(), locked: false, dirty: false, code: false, form: String::new() },
+            &wordcraft_doc::CharProps::default(),
+        )
+        .unwrap();
+    let data = crate::cmd::insert::base64_encode(&wordcraft_docx::write(&source).unwrap());
+    let dir = std::env::temp_dir().join(format!("wordcraft-data-filesize-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("proposal.docx");
+    std::fs::write(&path, vec![0u8; 1_500]).unwrap();
+    let roots = crate::file_access::AutomationRoots::new(Some(&dir), Some(&dir)).unwrap();
+
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    crate::file_access::confine(roots.as_ref(), || {
+        s.run("file.open", &json!({"path": path.to_string_lossy(), "data": data})).unwrap();
+        s.run("references.updateFields", &json!({})).unwrap();
+        assert_eq!(fields(&s)[0].1, "stale");
+
+        s.run("file.saveAs", &json!({"path": path.to_string_lossy()})).unwrap();
+        let saved_size = std::fs::metadata(&path).unwrap().len();
+        s.run("references.updateFields", &json!({})).unwrap();
+        assert_eq!(fields(&s)[0].1, saved_size.to_string());
+    });
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A FILESIZE of 4 GiB or more shows every byte, with or without a `\*` format.
 #[test]
 fn filesize_counts_past_u32_show_in_full() {

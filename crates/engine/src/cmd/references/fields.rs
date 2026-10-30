@@ -148,6 +148,9 @@ fn has_switch(instr: &str, sw: char) -> bool {
 /// before the first save, on the web, or when the path is outside the allowed folders or is not a
 /// regular file.
 fn saved_file_size(s: &Session) -> Option<u64> {
+    if s.path_names_only {
+        return None;
+    }
     crate::io::file_size(s.path.as_deref()?)
 }
 
