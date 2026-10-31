@@ -1,7 +1,7 @@
 use super::enter_tab::insert_paragraphs;
 use super::{
     Block, Border, BorderStyle, CmdError, CmdResult, ListKind, NumRef, OBJ, Path, Pos, Selection, Session, StoryRef, Table, Value, delete_selection,
-    p, sel_result, split_para, type_text_effect,
+    p, sel_result, split_para,
 };
 
 /// Smart quotes and AutoFormat-as-you-type (lists from "* " / "1. ", dashes).
@@ -68,7 +68,7 @@ pub(super) fn insert(s: &mut Session, v: &Value) -> CmdResult {
     typing_options(s, text);
     let smart_quote = if raw { None } else { autoformat(s, text) };
     let was_collapsed = s.sel.is_collapsed();
-    let effect = type_text_effect(s, smart_quote.as_deref().unwrap_or(text))?;
+    let effect = super::lead_in::type_text_lead(s, smart_quote.as_deref().unwrap_or(text))?;
     let mut outcome = crate::ImeEditOutcome {
         classified: true,
         content_changed: effect.content_changed,

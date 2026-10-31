@@ -118,6 +118,7 @@ impl Session {
             ime_text_join,
             join_anchor,
             autocap,
+            lead_in: None,
             rev,
             document_id,
             untitled,

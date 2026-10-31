@@ -350,8 +350,10 @@ pub(crate) fn type_text_effect(s: &mut Session, text: &str) -> Result<InsertEffe
 
 /// Insert pasted plain text like [`type_text`], except that its paragraph separators are text
 /// being transferred, not Enter key presses: an empty list item between them stays (Enter on
-/// one would end the list).
+/// one would end the list). Pasted text ends a list item's lead-in: it takes the formatting typing
+/// would have had without it.
 pub fn paste_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
+    text::end_lead_in(s);
     insert_text(s, text, false).map(|_| ())
 }
 
