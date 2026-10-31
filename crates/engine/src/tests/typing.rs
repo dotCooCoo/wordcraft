@@ -1305,6 +1305,20 @@ fn pasted_text_ends_the_lead_in() {
 }
 
 #[test]
+fn text_a_command_types_ends_the_lead_in_at_its_punctuation() {
+    // Insert › Date & Time as text: the lead-in ends at the date's first slash.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\n");
+    run(&mut s, "insert.dateTime", json!({"format": "M/d/yyyy"}));
+    let p = s.doc.para_at(&Pos::body(1, 0)).cloned().unwrap_or_default();
+    let slash = p.text.find('/').unwrap();
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, slash).bold), (Some(true), Some(true)), "{:?}", p.text);
+    assert_eq!(char_at(&s, 1, p.len() - 1).bold, None, "{:?}", p.text);
+}
+
+#[test]
 fn undo_and_redo_take_the_repeated_lead_in_with_the_typing() {
     let mut s = with_list_lead_in();
     typ(&mut s, "* Label: explanation");

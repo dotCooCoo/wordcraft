@@ -93,7 +93,7 @@ pub(super) fn insert_paragraphs(s: &mut Session, text: &str) -> CmdResult {
             enter(s, false)?;
         }
         if !line.is_empty() {
-            super::lead_in::type_text_lead(s, line)?;
+            type_text(s, line)?;
         }
     }
     sel_result(s)

@@ -148,7 +148,7 @@ pub(super) fn start(s: &mut Session, candidate: Option<Candidate>) {
 /// Type `text` like [`type_text_effect`]; during a lead-in, the text up to and including its first
 /// punctuation character (or up to a paragraph break) takes the lead-in's formatting and the rest
 /// the formatting typing would use without the option.
-pub(super) fn type_text_lead(s: &mut Session, text: &str) -> Result<InsertEffect, CmdError> {
+pub(crate) fn type_text_lead(s: &mut Session, text: &str) -> Result<InsertEffect, CmdError> {
     if active(s).is_none() {
         s.lead_in = None;
         return type_text_effect(s, text);

@@ -338,9 +338,11 @@ pub(crate) struct InsertEffect {
     pub state_changed: bool,
 }
 
-/// Insert typed text at the caret (replacing the selection), with pending formatting and track changes.
+/// Insert typed text at the caret (replacing the selection), with pending formatting and track
+/// changes. In a list item's lead-in, the text after its first punctuation character takes the
+/// formatting typing would have had without the lead-in.
 pub fn type_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
-    insert_text(s, text, true).map(|_| ())
+    text::type_text_lead(s, text).map(|_| ())
 }
 
 /// [`type_text`] with the effect the insertion had.
