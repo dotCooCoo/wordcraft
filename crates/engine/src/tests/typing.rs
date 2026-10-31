@@ -1439,6 +1439,36 @@ fn undo_and_redo_take_the_repeated_lead_in_with_the_typing() {
 }
 
 #[test]
+fn typing_after_undo_or_redo_in_a_lead_in_goes_on_with_the_lead_in() {
+    // Undo of part of the lead-in, of the whole item, and Redo after Undo: typing then ends the
+    // lead-in at its punctuation as before.
+    for (typed, steps, then) in
+        [("Te", &["edit.undo"][..], "Term: x"), ("Term: x", &["edit.undo"][..], "Term: x"), ("Te", &["edit.undo", "edit.redo"][..], "rm: x")]
+    {
+        let mut s = with_list_lead_in();
+        typ(&mut s, "* Label: explanation");
+        format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+        typ(&mut s, "\n");
+        typ(&mut s, typed);
+        for step in steps {
+            run(&mut s, step, json!({}));
+        }
+        typ(&mut s, then);
+        assert_eq!(s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).as_deref(), Some("Term: x"), "{typed:?} {steps:?}");
+        assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 4).bold, char_at(&s, 1, 6).bold), (Some(true), Some(true), None), "{typed:?} {steps:?}");
+    }
+    // Undo of an AutoCorrect rewrite puts the caret back before the rewrite; the lead-in goes on there.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\naccomodate ");
+    run(&mut s, "edit.undo", json!({}));
+    typ(&mut s, "word: more");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).as_deref(), Some("accomodate word: more"));
+    assert_eq!((char_at(&s, 1, 15).bold, char_at(&s, 1, 17).bold), (Some(true), None));
+}
+
+#[test]
 fn a_tracked_lead_in_is_an_insertion_and_locked_formatting_is_not_repeated() {
     let mut s = with_list_lead_in();
     typ(&mut s, "* Label: explanation");

@@ -86,6 +86,23 @@ pub(super) fn follow(s: &mut Session) {
     }
 }
 
+/// After Undo or Redo put back a lead-in with the text and selection of its step: the lead-in goes
+/// on at the restored caret while that is collapsed in the lead-in's paragraph, typing still uses
+/// its formatting and no punctuation character comes before the caret. Otherwise the next typing
+/// ends it.
+pub(crate) fn resync(s: &mut Session) {
+    let f = s.sel.focus.clone();
+    let punctuated = s.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).is_none_or(|t| t.chars().any(is_punctuation));
+    let document = s.document_id();
+    let collapsed = s.sel.is_collapsed();
+    let pending = s.pending.clone();
+    if let Some(l) = s.lead_in.as_mut().filter(|l| {
+        l.document == document && collapsed && !punctuated && l.at.story == f.story && l.at.path == f.path && pending.as_ref() == Some(&l.lead)
+    }) {
+        l.at = f;
+    }
+}
+
 /// Put back the lead-in of a window's view. When the document changed since the view was taken,
 /// the lead-in ends: typing in that window goes on with the formatting it would have had without
 /// the option.
