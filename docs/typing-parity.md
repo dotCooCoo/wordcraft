@@ -268,9 +268,10 @@ ideographic space (`autocorrect_finds_the_word_after_a_wide_space`):
   formatting of the previous item's lead-in, the text before its first punctuation character.
   Formatting on only part of that lead-in is not repeated ¹
   (`a_list_item_lead_in_takes_the_previous_items_lead_in_formatting`,
-  `only_formatting_the_whole_lead_in_shares_is_repeated`). The rest is WordCraft's own rule: each
-  character property (bold, italic, font, size, color and the others) is repeated when the whole
-  lead-in shares it, and links, revision marks, language and proofing settings are not; the
+  `only_formatting_the_whole_lead_in_shares_is_repeated`). The rest is WordCraft's own rule: a
+  character property such as bold, italic, font, size or color is repeated when the whole
+  lead-in shares it, and links, revision marks, language, proofing settings, the symbol font,
+  text direction, and hidden and web-hidden text are not; the
   punctuation character takes the lead-in's formatting and the text after it the formatting
   typing would have had; an item with no punctuation is all lead-in; the new item must be empty
   and in the same list and level, also when its style numbers it
