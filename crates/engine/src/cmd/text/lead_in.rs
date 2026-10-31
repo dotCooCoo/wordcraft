@@ -24,11 +24,16 @@ const KEPT: &[&str] = &["link", "ins", "del", "fmtChange", "symFont", "lang", "l
 #[derive(Clone, Debug)]
 pub(crate) struct LeadIn {
     document: u64,
+    /// Where the caret is after the lead-in typed so far.
     at: Pos,
+    /// The list and level of the new item.
+    numbering: NumRef,
     /// The formatting typing uses until the first punctuation character.
     lead: CharProps,
     /// The formatting typing would have used without the option: what follows the punctuation.
     body: CharProps,
+    /// The formatting picked for typing before the lead-in started, if any.
+    before: Option<CharProps>,
 }
 
 /// The finished list item Enter splits, kept until the new item exists.
@@ -49,19 +54,59 @@ fn option_on(s: &Session) -> bool {
     ac.enabled && ac.format_list_item_start && !(crate::cmd::protect::enforced(&s.doc) && s.doc.settings.protect_formatting)
 }
 
-/// The lead-in being typed at the caret, while typing still uses its formatting. Moving the
-/// caret, picking other formatting or switching documents ends it.
+/// The lead-in being typed at the caret, while typing still uses its formatting and the item
+/// is still in the same list at the same level. Moving the caret, picking other formatting or
+/// taking the item out of its list ends it.
 fn active(s: &Session) -> Option<&LeadIn> {
     let l = s.lead_in.as_ref()?;
-    let f = &s.sel.focus;
-    (l.document == s.document_id() && s.sel.is_collapsed() && f.story == l.at.story && f.path == l.at.path && s.pending.as_ref() == Some(&l.lead))
-        .then_some(l)
+    let numbered = || s.doc.para_at(&l.at).is_some_and(|p| s.doc.styles.resolve_para(&p.props).numbering == Some(l.numbering));
+    (l.document == s.document_id() && s.sel.is_collapsed() && s.sel.focus == l.at && s.pending.as_ref() == Some(&l.lead) && numbered()).then_some(l)
+}
+
+/// Is a lead-in being typed at the caret?
+pub(super) fn is_active(s: &Session) -> bool {
+    active(s).is_some()
+}
+
+/// After AutoCorrect rewrote the text before the caret during a lead-in: the lead-in goes on at
+/// the caret, or ends when the paragraph now has a punctuation character before the caret.
+pub(super) fn follow(s: &mut Session) {
+    let f = s.sel.focus.clone();
+    let punctuated = s.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).is_some_and(|t| t.chars().any(is_punctuation));
+    let Some(l) = s.lead_in.as_mut().filter(|l| l.at.story == f.story && l.at.path == f.path) else { return };
+    l.at = f;
+    if punctuated {
+        finish(s);
+    }
+}
+
+/// Put back the lead-in of a window's view. When the document changed since the view was taken,
+/// the lead-in ends: typing in that window goes on with the formatting it would have had without
+/// the option.
+pub(crate) fn put_back(s: &mut Session, lead_in: Option<LeadIn>, current: bool) {
+    match lead_in {
+        Some(l) if !current => {
+            drop_lead(s, l);
+            s.lead_in = None;
+        }
+        l => s.lead_in = l,
+    }
+}
+
+/// A lead-in that no longer applies at the caret: when typing still uses its formatting,
+/// typing goes back to the formatting picked before the lead-in started.
+fn drop_lead(s: &mut Session, l: LeadIn) {
+    if s.pending.as_ref() == Some(&l.lead) {
+        s.pending = l.before;
+    }
 }
 
 /// End a lead-in: typing goes on with the formatting it would have had without the option.
 pub(crate) fn finish(s: &mut Session) {
     if let Some(body) = active(s).map(|l| l.body.clone()) {
         s.pending = Some(body);
+    } else if let Some(l) = s.lead_in.take() {
+        drop_lead(s, l);
     }
     s.lead_in = None;
 }
@@ -141,8 +186,18 @@ pub(super) fn start(s: &mut Session, candidate: Option<Candidate>) {
     }
     let body = s.typing_props();
     let Some(lead) = shared(&c.runs, &body).filter(|l| *l != body) else { return };
-    s.pending = Some(lead.clone());
-    s.lead_in = Some(LeadIn { document: s.document_id(), at, lead, body });
+    let before = s.pending.replace(lead.clone());
+    s.lead_in = Some(LeadIn { document: s.document_id(), at, numbering: c.numbering, lead, body, before });
+}
+
+/// Type `text`, all of it in the lead-in's formatting, and keep the lead-in at the caret.
+fn type_lead(s: &mut Session, text: &str) -> Result<InsertEffect, CmdError> {
+    let effect = type_text_effect(s, text)?;
+    let at = s.sel.focus.clone();
+    if let Some(l) = s.lead_in.as_mut() {
+        l.at = at;
+    }
+    Ok(effect)
 }
 
 /// Type `text` like [`type_text_effect`]; during a lead-in, the text up to and including its first
@@ -150,7 +205,7 @@ pub(super) fn start(s: &mut Session, candidate: Option<Candidate>) {
 /// the formatting typing would use without the option.
 pub(crate) fn type_text_lead(s: &mut Session, text: &str) -> Result<InsertEffect, CmdError> {
     if active(s).is_none() {
-        s.lead_in = None;
+        finish(s);
         return type_text_effect(s, text);
     }
     let end = text.char_indices().find_map(|(i, c)| match c {
@@ -158,8 +213,8 @@ pub(crate) fn type_text_lead(s: &mut Session, text: &str) -> Result<InsertEffect
         c if is_punctuation(c) => Some(i + c.len_utf8()),
         _ => None,
     });
-    let Some((head, rest)) = end.and_then(|i| Some((text.get(..i)?, text.get(i..)?))) else { return type_text_effect(s, text) };
-    let mut effect = if head.is_empty() { InsertEffect::default() } else { type_text_effect(s, head)? };
+    let Some((head, rest)) = end.and_then(|i| Some((text.get(..i)?, text.get(i..)?))) else { return type_lead(s, text) };
+    let mut effect = if head.is_empty() { InsertEffect::default() } else { type_lead(s, head)? };
     finish(s);
     if !rest.is_empty() {
         let more = type_text_effect(s, rest)?;

@@ -1305,6 +1305,95 @@ fn pasted_text_ends_the_lead_in() {
 }
 
 #[test]
+fn a_caret_moved_inside_the_new_item_ends_the_lead_in() {
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\nAb");
+    let between = json!({"block": 1, "off": 1});
+    run(&mut s, "select.range", json!({"anchor": between, "focus": between}));
+    typ(&mut s, ": c");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).as_deref(), Some("A: cb"));
+    // Typing at the moved caret takes the formatting of the text before it.
+    assert_eq!((char_at(&s, 1, 1).bold, char_at(&s, 1, 3).bold), (Some(true), Some(true)));
+}
+
+#[test]
+fn taking_the_new_item_out_of_its_list_ends_the_lead_in() {
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\n");
+    run(&mut s, "para.bullets", json!({"off": true}));
+    typ(&mut s, "Next: more");
+    assert_eq!(paras(&s).last(), Some(&para("Next: more", None)));
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 6).bold), (None, None));
+}
+
+#[test]
+fn the_lead_in_stays_with_its_document_and_window() {
+    // Typing in another document leaves the lead-in of this one in effect.
+    let mut s = with_list_lead_in();
+    let a = s.document_id();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\n");
+    s.add_document(wordcraft_doc::Document::new());
+    typ(&mut s, "Other");
+    s.activate(a).unwrap();
+    typ(&mut s, "Next: more");
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 6).bold), (Some(true), None));
+    // Another window on the document types elsewhere: the lead-in ends in this window.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\n");
+    let other = s.copy_view();
+    let this = s.take_view();
+    s.put_view(other);
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    typ(&mut s, "x");
+    s.take_view();
+    s.put_view(this);
+    typ(&mut s, "Next: more");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).map(|p| p.text.clone()).as_deref(), Some("Next: more"));
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 6).bold), (None, None));
+    // A window that only looked at the document keeps it.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\n");
+    let other = s.copy_view();
+    let this = s.take_view();
+    s.put_view(other);
+    s.take_view();
+    s.put_view(this);
+    typ(&mut s, "Next: more");
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 6).bold), (Some(true), None));
+}
+
+#[test]
+fn an_autocorrect_rewrite_keeps_the_lead_in_and_a_double_space_period_ends_it() {
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    // "accomodate " becomes "accommodate ": a letter longer, the caret moves with it.
+    typ(&mut s, "\naccomodate word: more");
+    let p = s.doc.para_at(&Pos::body(1, 0)).cloned().unwrap_or_default();
+    let colon = p.text.find(':').unwrap();
+    assert_eq!((char_at(&s, 1, colon - 1).bold, char_at(&s, 1, colon + 2).bold), (Some(true), None), "{:?}", p.text);
+    // A period AutoFormat adds after two spaces ends the lead-in.
+    let mut s = with_list_lead_in();
+    run(&mut s, "tools.autocorrect", json!({"doubleSpacePeriod": true}));
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\nNext  more");
+    let p = s.doc.para_at(&Pos::body(1, 0)).cloned().unwrap_or_default();
+    assert_eq!(p.text, "Next. more");
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 6).bold), (Some(true), None));
+}
+
+#[test]
 fn text_a_command_types_ends_the_lead_in_at_its_punctuation() {
     // Insert › Date & Time as text: the lead-in ends at the date's first slash.
     let mut s = with_list_lead_in();

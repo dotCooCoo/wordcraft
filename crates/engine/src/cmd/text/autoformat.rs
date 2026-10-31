@@ -84,6 +84,7 @@ pub(super) fn insert(s: &mut Session, v: &Value) -> CmdResult {
     // The paragraph as typed, so an automatic change can be undone on its own.
     let f = s.sel.focus.clone();
     let typed = s.doc.para_at(&f).cloned().map(|p| (p, s.sel.clone()));
+    let leading = super::lead_in::is_active(s);
     // A list label ("a. ") becomes a list before AutoCorrect could capitalise it.
     let listed = text == " " && s.prefs.autocorrect.enabled && list_autoformat(s)?;
     if !listed {
@@ -96,6 +97,9 @@ pub(super) fn insert(s: &mut Session, v: &Value) -> CmdResult {
         && dash_autoformat(s).inspect_err(|_| s.autocap = None)?;
     if text == " " && !listed && was_collapsed && s.prefs.autocorrect.enabled && s.prefs.autocorrect.double_space_period {
         double_space_period(s)?;
+    }
+    if leading {
+        super::lead_in::follow(s);
     }
     // Compare the paragraph with the one exactly as typed. This is the actual effect of
     // AutoCorrect (including formatting-only superscripts and links), not an undo label that
