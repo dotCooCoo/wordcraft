@@ -55,12 +55,18 @@ fn option_on(s: &Session) -> bool {
 }
 
 /// The lead-in being typed at the caret, while typing still uses its formatting and the item
-/// is still in the same list at the same level. Moving the caret, picking other formatting or
-/// taking the item out of its list ends it.
+/// is still in the same list at the same level. Moving the caret, picking other formatting,
+/// taking the item out of its list, turning the option off or limiting formatting ends it.
 fn active(s: &Session) -> Option<&LeadIn> {
     let l = s.lead_in.as_ref()?;
     let numbered = || s.doc.para_at(&l.at).is_some_and(|p| s.doc.styles.resolve_para(&p.props).numbering == Some(l.numbering));
-    (l.document == s.document_id() && s.sel.is_collapsed() && s.sel.focus == l.at && s.pending.as_ref() == Some(&l.lead) && numbered()).then_some(l)
+    (option_on(s)
+        && l.document == s.document_id()
+        && s.sel.is_collapsed()
+        && s.sel.focus == l.at
+        && s.pending.as_ref() == Some(&l.lead)
+        && numbered())
+    .then_some(l)
 }
 
 /// Is a lead-in being typed at the caret?

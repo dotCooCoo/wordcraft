@@ -1295,6 +1295,23 @@ fn formatting_picked_or_a_caret_move_ends_the_lead_in() {
 }
 
 #[test]
+fn turning_the_option_off_or_limiting_formatting_ends_the_lead_in() {
+    for (cmd, params) in [
+        ("tools.autocorrect", json!({"formatListItemStart": false})),
+        ("tools.autocorrect", json!({"enabled": false})),
+        ("review.restrict", json!({"mode": "none", "formatting": true})),
+    ] {
+        let mut s = with_list_lead_in();
+        typ(&mut s, "* Label: explanation");
+        format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+        typ(&mut s, "\n");
+        run(&mut s, cmd, params.clone());
+        typ(&mut s, "Term: x");
+        assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 6).bold), (None, None), "{cmd} {params}");
+    }
+}
+
+#[test]
 fn pasted_text_ends_the_lead_in() {
     let mut s = with_list_lead_in();
     typ(&mut s, "* Label: explanation");
