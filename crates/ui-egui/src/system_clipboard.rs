@@ -1,6 +1,7 @@
 //! The system clipboard for the Paste commands (#584, #687, #833).
 //!
-//! egui's paste event only carries text, so the host reads the rest through [`crate::Services`]:
+//! egui's paste events carry only text, or pixels when there is no text, so the host reads the
+//! rest through [`crate::Services`]:
 //! another program's formatted copy as HTML or RTF (Paste keeps its formatting, Merge Formatting
 //! its emphasis), a picture for Paste Special, and the names of the formats there so a paste that
 //! finds nothing usable says what the clipboard holds instead of "empty". Everything read here
@@ -115,24 +116,29 @@ pub(crate) struct PendingPaste {
     settle: u8,
     /// The text egui read, claimed from the raw input ([`claim`]), pasted next frame.
     text: Option<String>,
+    /// The picture egui read instead (the clipboard held no text), claimed the same way.
+    image: Option<std::sync::Arc<egui::ColorImage>>,
+    /// Ctrl (Cmd) has been down since the Paste was chosen (a Paste shortcut's own key).
+    command_held: bool,
     /// The document and window the Paste was chosen in: the text goes there or nowhere.
     document: u64,
     window: u64,
 }
 
-/// When the host can't open the system clipboard at all (GNOME's Wayland has no data-control
-/// protocol, and a Flatpak without X11 has no fallback, #1368), the menu and ribbon Paste found
+/// When the host can't open the system clipboard at all (a Wayland session without a working
+/// data-control protocol and with no X11 fallback, #1368, #6635), the menu and ribbon Paste found
 /// no text and failed while Ctrl+V worked: Ctrl+V's text comes through egui's own Wayland
 /// clipboard. Ask egui for a paste the same way and run the command when its text arrives
-/// ([`deliver`]), once the menu it came from has closed ([`tick`]). Paste Special keeps its
-/// dialog's own path. Only the main window waits: egui answers in the input of the window that
+/// ([`deliver`]), once the menu it came from has closed ([`tick`]). Paste Special waits the same
+/// way, and its dialog then lists the text (#6635); its dialog's OK, which names the format
+/// chosen, runs at once. Only the main window waits: egui answers in the input of the window that
 /// asked, and only the main window's input passes through [`claim`] (a window opened with View ›
-/// New Window keeps the old behaviour).
+/// New Window keeps the old behavior).
 fn defer(app: &mut WordApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     // A paste that brings its own content (an agent's html, rtf or picture) has what it needs;
     // only Keep Text Only must have the clipboard's text.
     let brings_content = ["html", "rtf", "picture"].iter().any(|k| params.get(*k).is_some());
-    if id == "edit.pasteSpecial"
+    if (id == "edit.pasteSpecial" && params.get("as").is_some())
         || (brings_content && id != "edit.pasteText")
         || !app.services.clipboard_unreachable.as_ref().is_some_and(|f| f())
         || app.active_viewport() != egui::ViewportId::ROOT
@@ -147,6 +153,8 @@ fn defer(app: &mut WordApp, id: &str, params: &Value) -> Option<Result<Value, St
         since: None,
         settle: PASTE_SETTLE_FRAMES,
         text: None,
+        image: None,
+        command_held: ctx.input(|i| i.modifiers.command),
         document: app.session.document_id(),
         window: app.windows.shown(),
     });
@@ -161,23 +169,56 @@ fn defer(app: &mut WordApp, id: &str, params: &Value) -> Option<Result<Value, St
 ///
 /// A key, a click or typing before the text comes ends the wait instead: the person has moved on
 /// (egui-winit drops the request when the focus moves, as a click in a search box does), and a
-/// Ctrl+V of theirs after it is meant for wherever they are now, not for the document.
+/// Ctrl+V of theirs after it is meant for wherever they are now, not for the document. A held
+/// key's repeat (the Enter or KeyTip that chose Paste) is not new input, nor is the text a
+/// letter's repeat types, which egui-winit sends right after the key; egui is asked again after
+/// it. The raw input doesn't mark
+/// repeats yet (egui does that later in the pass), so a press of a key egui already has down
+/// counts as one. Ctrl (Cmd) going down is new input too: the Ctrl+V shortcut sends no key event,
+/// only its paste, which would otherwise be taken for the waiting Paste's answer.
 pub(crate) fn claim(app: &mut WordApp, events: &mut Vec<egui::Event>) {
-    let Some(p) = app.pending_paste.as_mut().filter(|p| p.text.is_none()) else {
+    let ctx = app.ctx.clone();
+    let held = |key: &egui::Key| ctx.as_ref().is_some_and(|c| c.input(|i| i.keys_down.contains(key)));
+    let Some(p) = app.pending_paste.as_mut().filter(|p| p.text.is_none() && p.image.is_none()) else {
         return;
     };
+    // The last event was a held key's repeat: the text after it is the repeat's own.
+    let mut after_repeat = false;
+    // Keys let go earlier in these events: pressed again, they are new input.
+    let mut released = Vec::new();
     for (i, e) in events.iter().enumerate() {
+        let repeat = std::mem::take(&mut after_repeat);
         match e {
-            egui::Event::Paste(_) if p.since.is_some() => {
-                if let egui::Event::Paste(t) = events.remove(i) {
-                    p.text = Some(t);
+            egui::Event::Key { key, pressed: false, .. } => released.push(*key),
+            egui::Event::Key { key, pressed: true, repeat: false, .. } if held(key) && !released.contains(key) => {
+                after_repeat = true;
+                // egui-winit's Wayland bridge drops a read in flight at any key press, repeats
+                // included: ask again (next tick).
+                p.since = None;
+            }
+            egui::Event::Text(_) if repeat => {}
+            egui::Event::ModifiersChanged(m) if m.command && !p.command_held => {
+                log::debug!("{}: a shortcut came first; the paste is cancelled", p.id);
+                app.pending_paste = None;
+                return;
+            }
+            // Ctrl held since the Paste was chosen (its own shortcut's) counts once it is let go.
+            egui::Event::ModifiersChanged(m) => p.command_held &= m.command,
+            egui::Event::Paste(_) | egui::Event::PasteImage(_) if p.since.is_some() => {
+                // Left in, a picture would reach the page, whose Paste would ask egui again.
+                match events.remove(i) {
+                    egui::Event::Paste(t) => p.text = Some(t),
+                    egui::Event::PasteImage(image) => p.image = Some(image),
+                    _ => {}
                 }
                 return;
             }
-            egui::Event::Paste(_)
-            | egui::Event::Key { pressed: true, .. }
-            | egui::Event::PointerButton { pressed: true, .. }
-            | egui::Event::Text(_) => {
+            egui::Event::Key { pressed: true, repeat: false, .. } => {
+                log::debug!("{}: a key came first; the paste is cancelled", p.id);
+                app.pending_paste = None;
+                return;
+            }
+            egui::Event::Paste(_) | egui::Event::PasteImage(_) | egui::Event::PointerButton { pressed: true, .. } | egui::Event::Text(_) => {
                 log::debug!("{}: other input came first; the paste is cancelled", p.id);
                 app.pending_paste = None;
                 return;
@@ -187,11 +228,17 @@ pub(crate) fn claim(app: &mut WordApp, events: &mut Vec<egui::Event>) {
     }
 }
 
-/// Run the waiting Paste with the text egui read. `false` when nothing was waiting. Another
+/// What egui read for the waiting Paste.
+enum Read {
+    Text(String),
+    Picture(std::sync::Arc<egui::ColorImage>),
+}
+
+/// Run the waiting Paste with what egui read. `false` when nothing was waiting. Another
 /// document or window active since the Paste was chosen (another window brought forward, even
 /// one on the same document with its own caret; a document opened) cancels it rather than
 /// pasting there.
-fn deliver(app: &mut WordApp, text: &str) -> bool {
+fn deliver(app: &mut WordApp, read: Read) -> bool {
     let Some(PendingPaste { id, mut params, document, window, .. }) = app.pending_paste.take() else {
         return false;
     };
@@ -200,7 +247,20 @@ fn deliver(app: &mut WordApp, text: &str) -> bool {
         app.status(CANCELLED.to_string());
         return true;
     }
+    let text = match read {
+        Read::Text(text) => text,
+        Read::Picture(image) => {
+            deliver_picture(app, &id, params, &image);
+            return true;
+        }
+    };
+    let text = text.as_str();
     log::debug!("{id}: egui read {} bytes of text", text.len());
+    // Picture files copied in a file manager reach us as their paths: paste the pictures, as
+    // Ctrl+V does, never the paths as text.
+    if id == "edit.paste" && app.session.math.is_none() && paste_picture::paste_named_files(app, text) {
+        return true;
+    }
     if let Some(o) = params.as_object_mut() {
         o.insert("text".into(), Value::String(text.to_string()));
     }
@@ -208,13 +268,60 @@ fn deliver(app: &mut WordApp, text: &str) -> bool {
     true
 }
 
-/// Each frame: paste the text egui read, else ask egui for it once the menu has closed, and if no
-/// text came in time (the clipboard holds none, or only a picture, which egui's paste doesn't
-/// carry), say so instead of waiting for ever.
+/// The picture egui read when the clipboard held no text: Paste inserts it, one undo step as any
+/// pasted picture, and Paste Special lists it. Keep Text Only and Merge Formatting have no text
+/// to paste.
+fn deliver_picture(app: &mut WordApp, id: &str, mut params: Value, image: &egui::ColorImage) {
+    if !matches!(id, "edit.paste" | "edit.pasteSpecial") || app.session.math.is_some() {
+        app.status(NO_TEXT.to_string());
+        return;
+    }
+    let [width, height] = image.size;
+    // Checked before the pixels are copied.
+    if !paste_picture::fits(width, height) {
+        app.status(format!("the clipboard picture is too large to paste ({width} × {height} pixels)"));
+        return;
+    }
+    let rgba = image.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
+    let data = match paste_picture::png_from_rgba(width, height, rgba) {
+        Ok(png) => wordcraft_engine::cmd::insert::base64_encode(&png),
+        Err(e) => {
+            app.status(e);
+            return;
+        }
+    };
+    log::debug!("{id}: egui read a {width} × {height} picture");
+    if id == "edit.pasteSpecial" && data.len() > MAX_PICTURE_BYTES {
+        app.status(format!("the clipboard picture is larger than {} MB", MAX_PICTURE_BYTES >> 20));
+        return;
+    }
+    if id == "edit.pasteSpecial" {
+        if let Some(o) = params.as_object_mut() {
+            o.insert("picture".into(), Value::String(data));
+            // The clipboard holds no text: without this the engine would offer an earlier copy's.
+            o.insert("text".into(), Value::String(String::new()));
+        }
+        let _ = app.run(id, params);
+        return;
+    }
+    let r = app.execute("insert.picture", serde_json::json!({"data": data}));
+    if let Err(e) = &r {
+        app.status(e.clone());
+    }
+    app.select_inserted_picture(&r);
+}
+
+/// Said when a waiting Paste gets no text.
+const NO_TEXT: &str = "the clipboard has no text to paste";
+
+/// Each frame: paste what egui read, else ask egui for it once the menu has closed (and Ctrl is
+/// up), asking again after a held key's repeat, and if
+/// nothing came in time (the clipboard is empty), say so instead of waiting for ever.
 pub(crate) fn tick(app: &mut WordApp, ctx: &egui::Context) {
     let now = ctx.input(|i| i.time);
-    if let Some(text) = app.pending_paste.as_mut().and_then(|p| p.text.take()) {
-        deliver(app, &text);
+    let read = app.pending_paste.as_mut().and_then(|p| p.text.take().map(Read::Text).or_else(|| p.image.take().map(Read::Picture)));
+    if let Some(read) = read {
+        deliver(app, read);
         return;
     }
     let Some(p) = app.pending_paste.as_mut() else { return };
@@ -223,6 +330,10 @@ pub(crate) fn tick(app: &mut WordApp, ctx: &egui::Context) {
             p.settle -= 1;
             ctx.request_repaint();
         }
+        // Chosen with Ctrl (Cmd) down, as Paste Special's shortcut is: asked once it is let go
+        // (its release wakes the UI). Until then a Ctrl+V's paste can't be told from the
+        // answer, and comes before the asking, so it stays Ctrl+V's.
+        None if p.command_held => {}
         None => {
             p.since = Some(now);
             ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
@@ -231,7 +342,7 @@ pub(crate) fn tick(app: &mut WordApp, ctx: &egui::Context) {
         Some(since) if now - since > PASTE_WAIT_SECS => {
             log::debug!("{}: no text came from egui", p.id);
             app.pending_paste = None;
-            app.status("the clipboard has no text to paste".to_string());
+            app.status(NO_TEXT.to_string());
         }
         Some(_) => {}
     }
@@ -550,8 +661,9 @@ mod tests {
         assert!(got_now[2].2.starts_with("<math") && got_now[2].2.contains("<msub>") && got_now[2].1 == "y=2x_s", "{got_now:?}");
     }
 
-    /// A desktop whose system clipboard can't be opened (GNOME's Wayland in a Flatpak without
-    /// X11, #1368): the host reads no text, as an empty clipboard would.
+    /// A desktop whose system clipboard can't be opened (a Wayland session without a working
+    /// data-control protocol and with no X11 fallback, #1368): the host reads no text, as an empty
+    /// clipboard would.
     fn unreachable() -> Services {
         Services { clipboard_text: Some(Box::new(|| None)), clipboard_unreachable: Some(Box::new(|| true)), ..Default::default() }
     }
@@ -689,6 +801,136 @@ mod tests {
         }
     }
 
+    /// A clipboard holding only a picture: egui answers with the picture, which is claimed (left
+    /// for the page, its Paste would ask egui again, and again). Paste inserts it as one picture,
+    /// Paste Special lists it, and Keep Text Only says there is no text.
+    #[test]
+    fn a_picture_egui_reads_is_claimed_and_pasted() {
+        let picture = || egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::new([3, 2], vec![egui::Color32::RED; 6])));
+        for id in ["edit.paste", "edit.pasteSpecial", "edit.pasteText"] {
+            let mut a = app(unreachable());
+            // An earlier copy made here, older than the picture on the clipboard.
+            a.run("text.insert", json!({"text": "older"})).unwrap();
+            a.run("select.all", json!({})).unwrap();
+            a.run("edit.copy", json!({})).unwrap();
+            a.run("caret.docEnd", json!({})).unwrap();
+            let ctx = egui::Context::default();
+            menu_paste(&mut a, &ctx, id).0.unwrap();
+            for t in [0.01, 0.02, 0.03] {
+                frame(&mut a, &ctx, t, vec![]);
+            }
+            let (_, left) = frame(&mut a, &ctx, 0.1, vec![picture()]);
+            assert!(left.is_empty(), "{id}: the picture never reaches the page");
+            frame(&mut a, &ctx, 0.2, vec![]);
+            assert!(a.pending_paste.is_none(), "{id}");
+            assert!(!frame(&mut a, &ctx, 0.3, vec![]).0, "{id}: egui isn't asked again");
+            match id {
+                "edit.paste" => assert_eq!(a.session.doc.media.len(), 1),
+                "edit.pasteSpecial" => {
+                    let Some(crate::dialogs::Dialog::PasteSpecial { formats, .. }) = &a.dialog else { panic!("no Paste Special dialog") };
+                    assert_eq!(formats, &["picture"], "the earlier copy's text isn't offered");
+                    assert!(a.session.doc.media.is_empty(), "nothing is pasted until OK");
+                }
+                _ => {
+                    assert!(a.session.doc.media.is_empty());
+                    assert_eq!(a.status_msg.as_ref().map(|(m, _)| m.as_str()), Some(NO_TEXT));
+                }
+            }
+        }
+    }
+
+    /// The key that chose Paste (Enter in the menu, a KeyTip letter), still held, repeats:
+    /// egui-winit sends each repeat as a press that isn't marked as one yet, followed for a letter
+    /// by the text it types, and neither ends the wait. A press of another key does, and so does
+    /// text that follows no repeat.
+    #[test]
+    fn a_held_keys_repeat_doesnt_end_the_wait() {
+        let press = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::default() };
+        for (key, repeat) in
+            [(egui::Key::Enter, vec![press(egui::Key::Enter)]), (egui::Key::V, vec![press(egui::Key::V), egui::Event::Text("v".into())])]
+        {
+            let mut a = app(unreachable());
+            let ctx = egui::Context::default();
+            ctx.run_pass(egui::RawInput { time: Some(0.0), events: vec![press(key)], ..Default::default() }, |_| {}).drop_without_applying_deltas();
+            menu_paste(&mut a, &ctx, "edit.paste").0.unwrap();
+            for t in [0.01, 0.02, 0.03] {
+                frame(&mut a, &ctx, t, repeat.clone());
+            }
+            // egui-winit's Wayland bridge drops the read at the repeat: egui is asked again.
+            assert!(frame(&mut a, &ctx, 0.5, repeat.clone()).0, "{key:?}: asked again after a repeat");
+            assert!(a.pending_paste.as_ref().is_some_and(|p| p.since.is_some()), "{key:?}: the held key's repeats don't end it");
+            frame(&mut a, &ctx, 0.6, vec![press(egui::Key::A)]);
+            assert!(a.pending_paste.is_none(), "{key:?}: another key does");
+        }
+        let mut a = app(unreachable());
+        let ctx = egui::Context::default();
+        ctx.run_pass(egui::RawInput { time: Some(0.0), events: vec![press(egui::Key::V)], ..Default::default() }, |_| {})
+            .drop_without_applying_deltas();
+        menu_paste(&mut a, &ctx, "edit.paste").0.unwrap();
+        frame(&mut a, &ctx, 0.01, vec![egui::Event::Text("v".into())]);
+        assert!(a.pending_paste.is_none(), "text on its own does");
+        // Let go and pressed again in one batch, the key is typing, not a repeat.
+        let mut a = app(unreachable());
+        let ctx = egui::Context::default();
+        ctx.run_pass(egui::RawInput { time: Some(0.0), events: vec![press(egui::Key::V)], ..Default::default() }, |_| {})
+            .drop_without_applying_deltas();
+        menu_paste(&mut a, &ctx, "edit.paste").0.unwrap();
+        let release =
+            egui::Event::Key { key: egui::Key::V, physical_key: None, pressed: false, repeat: false, modifiers: egui::Modifiers::default() };
+        frame(&mut a, &ctx, 0.01, vec![release, press(egui::Key::V), egui::Event::Text("v".into())]);
+        assert!(a.pending_paste.is_none(), "a new press does");
+    }
+
+    /// Ctrl+V while Paste Special waits sends no key event, only its paste: Ctrl going down ends
+    /// the wait, and the paste is left to the page as Ctrl+V's, not run as Paste Special. Ctrl
+    /// already down when the Paste was chosen (its own shortcut) counts only once let go, and egui
+    /// isn't asked until then.
+    #[test]
+    fn ctrl_going_down_ends_the_wait() {
+        let mut a = app(unreachable());
+        let ctx = egui::Context::default();
+        menu_paste(&mut a, &ctx, "edit.pasteSpecial").0.unwrap();
+        for t in [0.01, 0.02, 0.03] {
+            frame(&mut a, &ctx, t, vec![]);
+        }
+        let ctrl = |down| egui::Event::ModifiersChanged(if down { egui::Modifiers::COMMAND } else { egui::Modifiers::NONE });
+        let (_, left) = frame(&mut a, &ctx, 0.1, vec![ctrl(true), paste("ctrl+v")]);
+        assert!(a.pending_paste.is_none());
+        assert_eq!(left.len(), 2, "the paste is Ctrl+V's");
+        assert!(a.dialog.is_none(), "Paste Special doesn't open");
+
+        let mut a = app(unreachable());
+        let ctx = egui::Context::default();
+        ctx.run_pass(egui::RawInput { time: Some(0.0), events: vec![ctrl(true)], ..Default::default() }, |ctx| {
+            a.ctx = Some(ctx.clone());
+            a.run("edit.paste", json!({})).unwrap();
+        })
+        .drop_without_applying_deltas();
+        for t in [0.01, 0.02, 0.03] {
+            assert!(!frame(&mut a, &ctx, t, vec![ctrl(true)]).0, "not asked while the shortcut's Ctrl is held");
+        }
+        assert!(a.pending_paste.is_some(), "the shortcut's own Ctrl, still held");
+        assert!(frame(&mut a, &ctx, 0.04, vec![ctrl(false)]).0, "asked once it is let go");
+        frame(&mut a, &ctx, 0.05, vec![ctrl(true)]);
+        assert!(a.pending_paste.is_none(), "pressed again, it ends the wait");
+
+        // Paste Special chosen with Ctrl down, then V pressed again with Ctrl still down: the
+        // paste is Ctrl+V's, not Paste Special's answer.
+        let mut a = app(unreachable());
+        let ctx = egui::Context::default();
+        ctx.run_pass(egui::RawInput { time: Some(0.0), events: vec![ctrl(true)], ..Default::default() }, |ctx| {
+            a.ctx = Some(ctx.clone());
+            a.run("edit.pasteSpecial", json!({})).unwrap();
+        })
+        .drop_without_applying_deltas();
+        for t in [0.01, 0.02, 0.03] {
+            frame(&mut a, &ctx, t, vec![]);
+        }
+        let (_, left) = frame(&mut a, &ctx, 0.1, vec![paste("ctrl+v")]);
+        assert_eq!(left.len(), 1, "left to the page as Ctrl+V's");
+        assert!(a.pending_paste.is_none() && a.dialog.is_none(), "Paste Special doesn't open");
+    }
+
     /// Keep Text Only and Merge Formatting wait the same way and run as themselves.
     #[test]
     fn the_waiting_paste_keeps_its_own_command() {
@@ -705,8 +947,54 @@ mod tests {
         }
     }
 
-    /// No text within a second of asking (the clipboard is empty, or holds only a picture): the
-    /// wait ends with a message, and a paste event after that is left to the page.
+    /// The context menu's Paste Special waits the same way, then opens its dialog listing the
+    /// text egui read, instead of saying the clipboard is empty (#6635).
+    #[test]
+    fn paste_special_waits_and_lists_the_text() {
+        let mut a = app(unreachable());
+        let ctx = egui::Context::default();
+        assert_eq!(menu_paste(&mut a, &ctx, "edit.pasteSpecial").0.unwrap(), json!({"pending": "paste"}));
+        assert!(a.dialog.is_none(), "no dialog before the text comes");
+        for t in [0.01, 0.02, 0.03] {
+            frame(&mut a, &ctx, t, vec![]);
+        }
+        let (_, left) = frame(&mut a, &ctx, 0.1, vec![paste("listed")]);
+        assert!(left.is_empty());
+        let Some(crate::dialogs::Dialog::PasteSpecial { formats, payload, .. }) = &a.dialog else { panic!("no Paste Special dialog") };
+        assert!(formats.iter().any(|f| f == "text"), "{formats:?}");
+        assert_eq!(payload.get("text").and_then(Value::as_str), Some("listed"));
+        assert_eq!(first_para(&a), "", "nothing is pasted until OK");
+    }
+
+    /// A copied picture file reaches egui's paste as its path, and the host, which can't open the
+    /// clipboard, reads no picture: the waiting Paste inserts the file the path names, as Ctrl+V
+    /// does, and never types the path into the document. A path to a missing file pastes nothing.
+    #[test]
+    fn a_waiting_paste_of_copied_picture_files_inserts_the_pictures() {
+        let dir = std::env::temp_dir().join(format!("wc-waiting-paste-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("copied.png");
+        std::fs::write(&file, paste_picture::png_from_rgba(2, 2, vec![255; 16]).unwrap()).unwrap();
+        let address = |f: &std::path::Path| format!("file://{}{}", if cfg!(windows) { "/" } else { "" }, f.to_string_lossy().replace('\\', "/"));
+        for (path, inserted) in [(address(&file), true), (address(&dir.join("missing.png")), false)] {
+            let unreadable = || Some(paste_picture::ClipboardPicture::Unreadable("the system clipboard couldn't be opened".into()));
+            let mut a = app(Services { clipboard_picture: Some(Box::new(unreadable)), ..unreachable() });
+            let ctx = egui::Context::default();
+            menu_paste(&mut a, &ctx, "edit.paste").0.unwrap();
+            for t in [0.01, 0.02, 0.03] {
+                frame(&mut a, &ctx, t, vec![]);
+            }
+            frame(&mut a, &ctx, 0.1, vec![paste(&path)]);
+            assert!(a.pending_paste.is_none());
+            assert!(!a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains(".png"), "the path isn't pasted as text");
+            assert_eq!(!a.session.doc.media.is_empty(), inserted, "{path}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// No answer within `PASTE_WAIT_SECS` of asking (the clipboard is empty): the wait ends with a
+    /// message, and a paste event after that is left to the page.
     #[test]
     fn a_paste_that_gets_no_text_gives_up_with_a_message() {
         let mut a = app(unreachable());
@@ -726,8 +1014,8 @@ mod tests {
     }
 
     /// Only an unreachable clipboard waits: one that opens but is empty says so at once, a paste
-    /// that brings its text (Ctrl+V, an agent) runs as before, Paste Special keeps its dialog's
-    /// path, and with no window yet (the CLI, MCP) nothing waits.
+    /// that brings its text (Ctrl+V, an agent) runs as before, Paste Special's OK runs at once, and
+    /// with no window yet (the CLI, MCP) nothing waits.
     #[test]
     fn only_a_menu_paste_with_the_clipboard_out_of_reach_waits() {
         let ctx = egui::Context::default();
@@ -741,7 +1029,8 @@ mod tests {
         a.run("edit.paste", json!({"text": "typed"})).unwrap();
         assert_eq!(first_para(&a), "typed");
         assert!(a.pending_paste.is_none());
-        let _ = menu_paste(&mut a, &ctx, "edit.pasteSpecial");
+        // Paste Special's OK names the format chosen and runs at once.
+        a.run("edit.pasteSpecial", json!({"text": "ok", "as": "text"})).unwrap();
         assert!(a.pending_paste.is_none());
 
         let mut a = app(unreachable());

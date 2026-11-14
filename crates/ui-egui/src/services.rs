@@ -55,8 +55,9 @@ pub struct Services {
     /// Web: hand PDF bytes to the browser's print dialog (no download or intermediate file).
     /// Desktop uses `print_native` instead. An error means nothing was opened.
     pub print: Option<Box<dyn Fn(&[u8]) -> Result<(), String>>>,
-    /// Desktop: the picture on the system clipboard, if any — egui's paste only carries text
-    /// (#45). Read when Paste finds no text; see [`paste_picture`].
+    /// Desktop: the picture on the system clipboard, if any. egui's paste carries only text, or
+    /// pixels when there is no text, never copied files (#45). Read when Paste finds no text; see
+    /// [`paste_picture`].
     pub clipboard_picture: Option<Box<dyn Fn() -> Option<paste_picture::ClipboardPicture>>>,
     /// Whether the system has animation effects on (Windows: Animation effects; macOS: Reduce
     /// motion; Linux and the BSDs: the desktop's setting; browsers: `prefers-reduced-motion`), or
@@ -88,8 +89,8 @@ pub struct Services {
     /// is there instead of "empty" (#833).
     pub clipboard_formats: Option<Box<dyn Fn() -> Vec<String>>>,
     /// Desktop: `true` when the system clipboard can't be opened at all, so the hooks above read
-    /// nothing. GNOME's Wayland has no data-control protocol and a Flatpak without X11 has no
-    /// fallback; the menu and ribbon Paste then read the text the way Ctrl+V does (#1368).
+    /// nothing: a Wayland session without a working data-control protocol and with no X11
+    /// fallback. The menu and ribbon Paste then read the text the way Ctrl+V does (#1368).
     pub clipboard_unreachable: Option<Box<dyn Fn() -> bool>>,
     /// Web: keep a font the user added (stored file name, original bytes) for the next visit
     /// (#582). Desktop fonts are stored by the font database itself, in the app's font folder.

@@ -1,10 +1,11 @@
 //! Pasting a picture from the system clipboard (#45).
 //!
-//! egui's paste event only carries text, so a clipboard holding just a picture (a screenshot, a
-//! browser's Copy Image) or a copied picture file used to paste nothing. The host reads the
-//! clipboard through [`crate::Services::clipboard_picture`]; this module checks what it got — the
-//! clipboard comes from other programs, so sizes are hostile — and inserts it with
-//! `insert.picture`, one undoable step like any inserted picture.
+//! egui reads the clipboard's text, or its pixels when it holds no text, but not copied files or
+//! encoded pictures, so a clipboard holding just a picture (a screenshot, a browser's Copy Image)
+//! or a copied picture file used to paste nothing. The host reads the clipboard through
+//! [`crate::Services::clipboard_picture`]. This module checks the sizes of what it got (the
+//! clipboard comes from other programs) and inserts it with `insert.picture`, one undoable step
+//! like any inserted picture.
 
 use std::path::{Path, PathBuf};
 
@@ -59,8 +60,12 @@ pub fn png_from_rgba(width: usize, height: usize, rgba: Vec<u8>) -> Result<Vec<u
 /// Whether a paste takes a `width` × `height` picture: the sides and pixels [`png_from_rgba`]
 /// allows.
 fn pastes(width: u32, height: u32) -> bool {
-    let (w, h) = (width as usize, height as usize);
-    w <= MAX_SIDE && h <= MAX_SIDE && w.checked_mul(h).is_some_and(|n| n <= MAX_PIXELS)
+    fits(width as usize, height as usize)
+}
+
+/// Whether a paste takes a `width` × `height` picture, checked before its pixels are copied.
+pub(crate) fn fits(width: usize, height: usize) -> bool {
+    width <= MAX_SIDE && height <= MAX_SIDE && width.checked_mul(height).is_some_and(|n| n <= MAX_PIXELS)
 }
 
 fn too_large_to_paste(width: u32, height: u32) -> ClipboardPicture {
@@ -124,6 +129,11 @@ pub fn names_picture_files(text: &str) -> bool {
 /// service): the caller pastes as usual.
 pub(crate) fn paste(app: &mut WordApp) -> Option<Result<Value, String>> {
     let picture = app.services.clipboard_picture.as_ref()?()?;
+    insert(app, picture)
+}
+
+/// Insert `picture`. `None` when it holds nothing to insert (copied files that aren't pictures).
+fn insert(app: &mut WordApp, picture: ClipboardPicture) -> Option<Result<Value, String>> {
     let r = match picture {
         ClipboardPicture::Pixels { width, height, rgba } => match png_from_rgba(width, height, rgba) {
             Ok(png) => app.execute("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png)})),
@@ -200,9 +210,66 @@ fn read_picture_file(path: &Path, limit: u64) -> Option<Vec<u8>> {
 }
 
 /// Paste text naming copied picture files: insert the pictures when the clipboard holds those
-/// files. False leaves the text to the usual paste.
+/// files. False leaves the text to the usual paste. When the host can't open the system clipboard
+/// ([`crate::Services::clipboard_unreachable`]), it can't list the copied files either, so the
+/// files named in the text are inserted.
 pub(crate) fn paste_named_files(app: &mut WordApp, text: &str) -> bool {
-    names_picture_files(text) && paste(app).is_some()
+    if !names_picture_files(text) {
+        return false;
+    }
+    if app.services.clipboard_unreachable.as_ref().is_some_and(|f| f()) {
+        return insert(app, ClipboardPicture::Files(named_files(text))).is_some();
+    }
+    paste(app).is_some()
+}
+
+/// The files named in text that [`names_picture_files`] accepts: each line's path, with a
+/// `file://` address's `%XX` escapes decoded. An address with a host other than `localhost`,
+/// and one that doesn't decode to an absolute UTF-8 path, is left out.
+fn named_files(text: &str) -> Vec<PathBuf> {
+    let lines = text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).take(MAX_FILES);
+    lines
+        .filter_map(|l| match l.strip_prefix("file://") {
+            Some(address) => {
+                // Only a local address: no host, or `localhost`. Another host's file isn't read.
+                let path = address.strip_prefix("localhost").unwrap_or(address);
+                if !path.starts_with('/') {
+                    return None;
+                }
+                let path = String::from_utf8(percent_decoded(path)).ok()?;
+                // `file:///C:/…` names `C:/…` on Windows.
+                let drive = path.strip_prefix('/').filter(|p| matches!(p.as_bytes(), [d, b':', ..] if d.is_ascii_alphabetic()));
+                let path = PathBuf::from(drive.filter(|_| cfg!(windows)).unwrap_or(&path));
+                path.is_absolute().then_some(path)
+            }
+            None => Some(PathBuf::from(l)),
+        })
+        .collect()
+}
+
+/// `s` with each `%XX` escape replaced by its byte; a `%` not followed by two hex digits is kept.
+fn percent_decoded(s: &str) -> Vec<u8> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while let Some(&b) = bytes.get(i) {
+        let hex = bytes
+            .get(i + 1..i + 3)
+            .filter(|h| h.iter().all(u8::is_ascii_hexdigit))
+            .and_then(|h| std::str::from_utf8(h).ok())
+            .and_then(|h| u8::from_str_radix(h, 16).ok());
+        match hex {
+            Some(v) if b == b'%' => {
+                out.push(v);
+                i += 3;
+            }
+            _ => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -349,6 +416,37 @@ mod tests {
         assert_eq!(pictures(&mut a), 1);
         let focus = a.session.sel.focus.clone();
         assert_eq!(a.session.doc.para_at(&focus).map(|p| p.text.contains("wc-ribbon-paste")), Some(false));
+    }
+
+    /// With the system clipboard out of reach, the host can't list copied files and reads no
+    /// picture (#5217, #6635): the picture files named in the pasted text are inserted, `file://`
+    /// addresses decoded, and nothing else is read from the clipboard.
+    #[test]
+    fn copied_picture_files_paste_from_their_names_when_the_clipboard_is_out_of_reach() {
+        let dir = std::env::temp_dir().join(format!("wc-paste-unreachable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("shot 1.png");
+        std::fs::write(&path, png_from_rgba(4, 4, vec![200; 4 * 4 * 4]).unwrap()).unwrap();
+        let services = Services {
+            clipboard_picture: Some(Box::new(|| Some(ClipboardPicture::Unreadable("the system clipboard couldn't be opened".into())))),
+            clipboard_unreachable: Some(Box::new(|| true)),
+            ..Default::default()
+        };
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+        let name = path.to_string_lossy().replace(' ', "%20");
+        let name = if cfg!(windows) { format!("/{}", name.replace('\\', "/")) } else { name };
+        let pasted = paste_named_files(&mut a, &format!("file://{name}\n"));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(pasted);
+        assert_eq!(pictures(&mut a), 1);
+        assert_eq!(percent_decoded("a%20b%2Fc%zz%+1%4"), b"a b/c%zz%+1%4");
+        #[cfg(unix)]
+        assert_eq!(
+            named_files("file://localhost/tmp/a%20b.png\nfile://server/share/d.png\nfile://localhostile/e.png\n/tmp/c.png"),
+            [PathBuf::from("/tmp/a b.png"), PathBuf::from("/tmp/c.png")],
+            "another host's files are left out"
+        );
     }
 
     /// A pasted picture is selected, with handles, as one inserted from Insert › Pictures is

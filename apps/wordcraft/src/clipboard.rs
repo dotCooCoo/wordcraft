@@ -173,8 +173,8 @@ pub fn rtf() -> Option<String> {
     s.trim_start().starts_with("{\\rtf").then_some(s)
 }
 
-/// `true` when the system clipboard can't be opened at all (GNOME's Wayland without the
-/// data-control protocol, in a Flatpak without X11): the menu Paste then reads through egui.
+/// `true` when the system clipboard can't be opened at all (a Wayland session without a working
+/// data-control protocol and with no X11 fallback): the menu Paste then reads through egui.
 pub fn unreachable() -> bool {
     arboard::Clipboard::new().is_err()
 }
