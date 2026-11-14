@@ -1306,6 +1306,117 @@ fn emf_rec(typ: u32, fields: &[i32]) -> Vec<u8> {
     v
 }
 
+/// The PDF of a document holding one 70 pt metafile picture, uncompressed.
+fn metafile_pdf(emf: Vec<u8>) -> String {
+    String::from_utf8_lossy(&metafile_pdf_bytes(emf)).into_owned()
+}
+
+fn metafile_pdf_bytes(emf: Vec<u8>) -> Vec<u8> {
+    let mut d = Document::new();
+    let media = d.add_media(emf, "emf");
+    let mut p = Paragraph::with_text("Figure: ", CharProps::default());
+    let n = p.len();
+    p.insert_object(
+        n,
+        InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
+        &CharProps::default(),
+    )
+    .unwrap();
+    d.body = vec![para_block(p)];
+    export(&d, &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap()
+}
+
+/// #6636: an EMF+ only file whose EmfPlusDrawImage draws a 32bppPARGB bitmap: the bitmap is
+/// embedded as an image.
+#[test]
+fn emf_plus_only_bitmap_is_embedded() {
+    let plus_rec = |typ: u16, flags: u16, data: &[u8]| {
+        let mut v = typ.to_le_bytes().to_vec();
+        v.extend(flags.to_le_bytes());
+        v.extend(((12 + data.len()) as u32).to_le_bytes());
+        v.extend((data.len() as u32).to_le_bytes());
+        v.extend(data);
+        v
+    };
+    let le32 = |vals: &[i32]| -> Vec<u8> { vals.iter().flat_map(|v| v.to_le_bytes()).collect() };
+    let header = plus_rec(0x4001, 0, &le32(&[0xDBC0_1002_u32 as i32, 1, 96, 96]));
+    let mut image = le32(&[0xDBC0_1002_u32 as i32, 1, 2, 2, 8, 0x000E_200B, 0]);
+    image.extend([0u8, 0, 255, 255].repeat(4));
+    let object = plus_rec(0x4008, 0x0500, &image);
+    let mut draw = le32(&[-1, 2]);
+    draw.extend([0.0f32, 0.0, 2.0, 2.0, 50.0, 0.0, 50.0, 100.0].iter().flat_map(|v| v.to_le_bytes()));
+    let draw = plus_rec(0x401A, 0, &draw);
+    let mut comment = 0x2B46_4D45u32.to_le_bytes().to_vec();
+    comment.extend([header, object, draw, plus_rec(0x4002, 0, &[])].concat());
+    let mut rec = 70u32.to_le_bytes().to_vec();
+    rec.extend(((12 + comment.len()) as u32).to_le_bytes());
+    rec.extend((comment.len() as u32).to_le_bytes());
+    rec.extend(comment);
+    let bytes = metafile_pdf_bytes(emf_file(&[rec, emf_rec(14, &[0; 3])]));
+    let images = pdf_images(&bytes);
+    assert!(images.iter().any(|(w, h, ..)| (*w, *h) == (2, 2)), "the 2 × 2 bitmap is embedded");
+    assert!(!String::from_utf8_lossy(&bytes).contains("0.8156"), "the gray placeholder box is not drawn");
+}
+
+/// A dotted cosmetic pen (CREATEPEN, PS_DOT, width 0) draws hairline dots: its dashes and gaps are
+/// the hairline's width, not the file's device units scaled to the frame (0.7 pt here).
+#[test]
+fn metafile_cosmetic_dotted_pen_draws_hairline_dots() {
+    let recs = [emf_rec(38, &[1, 2, 0, 0, 0]), emf_rec(37, &[1]), emf_rec(27, &[0, 50]), emf_rec(54, &[100, 50]), emf_rec(14, &[0; 3])];
+    let raw = metafile_pdf(emf_file(&recs));
+    assert!(raw.contains("[0.25 0.25]0 d"), "the dots are hairline-sized");
+}
+
+/// A geometric PS_USERSTYLE pen whose dashes and gaps are far below the hairline draws its line
+/// solid: no dash array is written.
+#[test]
+fn metafile_sub_pixel_dashes_draw_solid() {
+    let mut emf = emf_file(&[]);
+    // 10,000 device pixels over 250 mm: a device unit is 0.025 mm. The picture is 1000 units wide.
+    let le32 = |vals: &[i32]| -> Vec<u8> { vals.iter().flat_map(|v| v.to_le_bytes()).collect() };
+    emf[8..24].copy_from_slice(&le32(&[0, 0, 1000, 1000]));
+    emf[72..80].copy_from_slice(&le32(&[10_000, 10_000]));
+    let pen = emf_rec(95, &[1, 0, 0, 0, 0, 0x0001_0207, 80, 0, 0, 0, 2, 1, 1]);
+    let recs = [pen, emf_rec(37, &[1]), emf_rec(27, &[0, 500]), emf_rec(54, &[1000, 500]), emf_rec(14, &[0; 3])];
+    emf.extend(recs.concat());
+    let raw = metafile_pdf(emf);
+    assert!(raw.contains(" w ") && !raw.contains("]0 d"), "a stroke with no dash array");
+}
+
+/// A clip region (INTERSECTCLIPRECT) adds a clip around the rectangle it clips.
+#[test]
+fn metafile_clip_region_is_a_clip() {
+    let clips = |raw: &str| raw.matches("\nW\nn").count() + raw.matches("\nW*\nn").count();
+    let draw = |clip: bool| {
+        let mut recs = vec![emf_rec(39, &[1, 0, 0x0000_00FF, 0]), emf_rec(37, &[1])];
+        if clip {
+            recs.push(emf_rec(30, &[0, 0, 50, 100]));
+        }
+        recs.extend([emf_rec(43, &[0, 0, 100, 100]), emf_rec(14, &[0; 3])]);
+        metafile_pdf(emf_file(&recs))
+    };
+    let (with, without) = (clips(&draw(true)), clips(&draw(false)));
+    assert!(without > 0 && with == without + 1, "one clip more with the region: {with} and {without}");
+}
+
+/// A hatched brush (CREATEBRUSHINDIRECT, BS_HATCHED) fills through a tiling pattern, not with a
+/// solid color.
+#[test]
+fn metafile_hatch_brush_is_a_tiling_pattern() {
+    let recs = [emf_rec(39, &[1, 2, 0x0000_00FF, 1]), emf_rec(37, &[1]), emf_rec(43, &[0, 0, 100, 100]), emf_rec(14, &[0; 3])];
+    let raw = metafile_pdf(emf_file(&recs));
+    assert!(raw.contains("/PatternType 1"), "the hatch is a tiling pattern");
+}
+
 #[test]
 fn metafile_strokes_use_round_caps_and_joins() {
     // A 4-unit black pen (handle 1) outlines a rectangle, so the stroke is drawn with round caps and joins.
@@ -1424,6 +1535,17 @@ fn emf_text_records(text: &str) -> Vec<Vec<u8>> {
     out.extend(units);
     out.resize(76 + padded, 0);
     vec![font, emf_rec(37, &[1]), emf_rec(24, &[0]), out]
+}
+
+/// With the opaque background mode (the default) and a red background color (SETBKCOLOR), a text
+/// run's character cells are filled red behind the text.
+#[test]
+fn metafile_text_fills_its_opaque_background() {
+    let mut recs = vec![emf_rec(25, &[0x0000_00FF])];
+    recs.extend(emf_text_records("Hi"));
+    recs.push(emf_rec(14, &[0; 3]));
+    let raw = metafile_pdf(emf_file(&recs));
+    assert!(raw.contains("1 0 0 rg"), "the character cells are filled red");
 }
 
 /// #1764: the text of an EMF picture (EXTTEXTOUTW) is drawn, so it is in the PDF's text layer.

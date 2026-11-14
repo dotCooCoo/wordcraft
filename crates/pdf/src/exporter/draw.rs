@@ -324,7 +324,7 @@ impl Exporter<'_> {
             s.set_fill(None);
             return;
         };
-        let [cl, ct, vis_w, vis_h] = wordcraft_metafile::crop_window(*crop).map(|v| v as f32);
+        let [cl, ct, vis_w, vis_h] = wordcraft_layout::crop_window(*crop).map(|v| v as f32);
         let (fw, fh) = (rect.w / vis_w, rect.h / vis_h);
         let Some(size) = Size::from_wh(fw.max(0.01), fh.max(0.01)) else { return };
         let fade = alpha < 0.999;

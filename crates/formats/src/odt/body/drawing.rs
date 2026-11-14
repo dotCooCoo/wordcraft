@@ -402,7 +402,7 @@ impl Body<'_> {
 
 /// Whether WordCraft can show these bytes as a picture (see the function below).
 pub(in crate::odt) fn readable_picture(data: &[u8]) -> bool {
-    wordcraft_metafile::is_metafile(data) || model::sniff_image(data).is_some()
+    craft_metafile::is_metafile(data) || model::sniff_image(data).is_some()
 }
 
 /// A picture from a package's bytes: a raster image, or a Windows metafile (WMF, EMF: LibreOffice
@@ -411,7 +411,7 @@ pub(in crate::odt) fn picture(data: Vec<u8>, w: Option<f32>, h: Option<f32>, alt
     // What the frame states, if it could be a size (far past any page, kept from overflowing).
     let stated = |v: Option<f32>| v.filter(|v| v.is_finite() && *v > 0.0).map(|v| v.min(1e6));
     let (w, h) = (stated(w), stated(h));
-    let mut img = if wordcraft_metafile::is_metafile(&data) {
+    let mut img = if craft_metafile::is_metafile(&data) {
         // An EMF starts with its header record, type 1.
         let ext = if data.get(..4) == Some(&[1, 0, 0, 0]) { "emf" } else { "wmf" };
         // Its own size, when the frame gives none: a placeable WMF's or an EMF's frame, points.
@@ -450,7 +450,7 @@ fn fit_to(img: &mut model::Img, room: Option<f32>) {
 /// A picture's height for each point of its width, by its own size, before anything caps it (1
 /// when it doesn't say).
 fn height_per_width(data: &[u8]) -> f32 {
-    let own = if wordcraft_metafile::is_metafile(data) { metafile_size(data) } else { model::image_px(data).map(|(w, h)| (w as f32, h as f32)) };
+    let own = if craft_metafile::is_metafile(data) { metafile_size(data) } else { model::image_px(data).map(|(w, h)| (w as f32, h as f32)) };
     own.filter(|(w, h)| w.is_finite() && h.is_finite() && *w > 0.0 && *h > 0.0).map_or(1.0, |(w, h)| h / w)
 }
 

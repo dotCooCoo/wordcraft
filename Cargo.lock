@@ -7128,6 +7128,7 @@ dependencies = [
  "cfb",
  "chardetng",
  "chrono",
+ "craft-metafile",
  "craft-rtf",
  "encoding_rs",
  "getrandom 0.3.4",
@@ -7143,7 +7144,6 @@ dependencies = [
  "wordcraft-doc",
  "wordcraft-docx",
  "wordcraft-geom",
- "wordcraft-metafile",
  "zeroize",
  "zip 3.0.0",
 ]
@@ -7160,6 +7160,7 @@ dependencies = [
 name = "wordcraft-layout"
 version = "0.18.1"
 dependencies = [
+ "craft-metafile",
  "craft-proof",
  "image",
  "js-sys",
@@ -7173,7 +7174,6 @@ dependencies = [
  "wordcraft-doc",
  "wordcraft-fonts",
  "wordcraft-geom",
- "wordcraft-metafile",
 ]
 
 [[package]]
@@ -7189,18 +7189,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "wordcraft-metafile"
-version = "0.18.1"
-dependencies = [
- "kurbo",
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "wordcraft-pdf"
 version = "0.18.1"
 dependencies = [
  "chrono",
+ "craft-metafile",
  "craft-pdf",
  "hayro-cmap",
  "hayro-interpret",
@@ -7214,13 +7207,13 @@ dependencies = [
  "wordcraft-fonts",
  "wordcraft-geom",
  "wordcraft-layout",
- "wordcraft-metafile",
 ]
 
 [[package]]
 name = "wordcraft-render"
 version = "0.18.1"
 dependencies = [
+ "craft-metafile",
  "image",
  "log",
  "vello_cpu",
@@ -7228,7 +7221,6 @@ dependencies = [
  "wordcraft-fonts",
  "wordcraft-geom",
  "wordcraft-layout",
- "wordcraft-metafile",
 ]
 
 [[package]]

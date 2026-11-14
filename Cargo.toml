@@ -36,7 +36,6 @@ wordcraft-mcp = { path = "crates/mcp" }
 wordcraft-zotero = { path = "crates/zotero" }
 wordcraft-control-key = { path = "crates/control-key" }
 wordcraft-ui-egui = { path = "crates/ui-egui" }
-wordcraft-metafile = { path = "crates/metafile" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
@@ -74,6 +73,8 @@ craft-wordmodel = { git = "https://github.com/storytold/craft-libs", rev = "9dcb
 craft-docx = { git = "https://github.com/storytold/craft-libs", rev = "9dcbd90c7d16e1a668b3afa057e940e2db328b93", version = "=0.1.0" }
 craft-rtf = { git = "https://github.com/storytold/craft-libs", rev = "9dcbd90c7d16e1a668b3afa057e940e2db328b93", version = "=0.1.0", features = ["doc"] }
 craft-doc-binary = { git = "https://github.com/storytold/craft-libs", rev = "9dcbd90c7d16e1a668b3afa057e940e2db328b93", version = "=0.1.0" }
+# WMF, EMF and EMF+ reader.
+craft-metafile = { git = "https://github.com/storytold/craft-libs", rev = "9dcbd90c7d16e1a668b3afa057e940e2db328b93", version = "=0.1.0" }
 quick-xml = "0.41"
 zip = { version = "3", default-features = false, features = ["deflate"] }
 # zlib streams (compressed metafile pictures in `.doc` drawings); already in the lock as a dependency of other crates.
