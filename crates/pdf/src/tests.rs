@@ -1367,6 +1367,62 @@ fn emf_plus_only_bitmap_is_embedded() {
     assert!(!String::from_utf8_lossy(&bytes).contains("0.8156"), "the gray placeholder box is not drawn");
 }
 
+/// #6636: an EMF+ only file whose EmfPlusDrawImage draws a bitmap in PixelFormat32bppARGB,
+/// 24bppRGB or 32bppRGB, or a compressed PNG or JPEG bitmap: the bitmap is embedded as an image.
+#[test]
+fn emf_plus_only_bitmap_formats_are_embedded() {
+    let plus_rec = |typ: u16, flags: u16, data: &[u8]| {
+        let mut v = typ.to_le_bytes().to_vec();
+        v.extend(flags.to_le_bytes());
+        v.extend(((12 + data.len()) as u32).to_le_bytes());
+        v.extend((data.len() as u32).to_le_bytes());
+        v.extend(data);
+        v
+    };
+    let le32 = |vals: &[i32]| -> Vec<u8> { vals.iter().flat_map(|v| v.to_le_bytes()).collect() };
+    let encoded = |png: bool| {
+        let red = [255u8, 0, 0].repeat(15);
+        let mut out = Vec::new();
+        if png {
+            let enc = image::codecs::png::PngEncoder::new(&mut out);
+            image::ImageEncoder::write_image(enc, &red, 5, 3, image::ExtendedColorType::Rgb8).unwrap();
+        } else {
+            let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 100);
+            image::ImageEncoder::write_image(enc, &red, 5, 3, image::ExtendedColorType::Rgb8).unwrap();
+        }
+        out
+    };
+    // Name, width, height, stride, pixel format, bitmap type (0 pixels, 1 compressed) and data.
+    let cases: [(&str, i32, i32, i32, u32, i32, Vec<u8>); 5] = [
+        ("32bppARGB", 2, 2, 8, 0x0026_200A, 0, [0u8, 0, 255, 255].repeat(4)),
+        ("24bppRGB", 2, 2, 8, 0x0002_1808, 0, [0u8, 0, 255, 0, 0, 255, 0, 0].repeat(2)),
+        ("32bppRGB", 2, 2, 8, 0x0002_2009, 0, [0u8, 0, 255, 0].repeat(4)),
+        ("PNG", 5, 3, 0, 0, 1, encoded(true)),
+        ("JPEG", 5, 3, 0, 0, 1, encoded(false)),
+    ];
+    for (name, w, h, stride, format, kind, data) in cases {
+        let header = plus_rec(0x4001, 0, &le32(&[0xDBC0_1002_u32 as i32, 1, 96, 96]));
+        let mut image = le32(&[0xDBC0_1002_u32 as i32, 1, w, h, stride, format as i32, kind]);
+        image.extend(data);
+        // Records are a multiple of 4 bytes long.
+        image.resize(image.len().next_multiple_of(4), 0);
+        let object = plus_rec(0x4008, 0x0500, &image);
+        let mut draw = le32(&[-1, 2]);
+        draw.extend([0.0f32, 0.0, w as f32, h as f32, 50.0, 0.0, 50.0, 100.0].iter().flat_map(|v| v.to_le_bytes()));
+        let draw = plus_rec(0x401A, 0, &draw);
+        let mut comment = 0x2B46_4D45u32.to_le_bytes().to_vec();
+        comment.extend([header, object, draw, plus_rec(0x4002, 0, &[])].concat());
+        let mut rec = 70u32.to_le_bytes().to_vec();
+        rec.extend(((12 + comment.len()) as u32).to_le_bytes());
+        rec.extend((comment.len() as u32).to_le_bytes());
+        rec.extend(comment);
+        let bytes = metafile_pdf_bytes(emf_file(&[rec, emf_rec(14, &[0; 3])]));
+        let images = pdf_images(&bytes);
+        assert!(images.iter().any(|(iw, ih, ..)| (*iw, *ih) == (w as u32, h as u32)), "{name}: the {w} × {h} bitmap is embedded");
+        assert!(!String::from_utf8_lossy(&bytes).contains("0.8156"), "{name}: the gray placeholder box is not drawn");
+    }
+}
+
 /// A dotted cosmetic pen (CREATEPEN, PS_DOT, width 0) draws hairline dots: its dashes and gaps are
 /// the hairline's width, not the file's device units scaled to the frame (0.7 pt here).
 #[test]

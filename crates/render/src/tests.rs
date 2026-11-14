@@ -1061,6 +1061,47 @@ fn emf_plus_only_bitmap_is_drawn() {
     assert!(is_paper(left), "left half should be paper: {left:?}");
 }
 
+/// #6636: EmfPlusDrawImage draws a bitmap in PixelFormat32bppARGB, 24bppRGB and 32bppRGB, and a
+/// compressed PNG or JPEG bitmap, in an EMF+ only file.
+#[test]
+fn emf_plus_only_bitmap_formats_are_drawn() {
+    let encoded = |png: bool| {
+        let red = [255u8, 0, 0].repeat(64);
+        let mut out = Vec::new();
+        if png {
+            let enc = image::codecs::png::PngEncoder::new(&mut out);
+            image::ImageEncoder::write_image(enc, &red, 8, 8, image::ExtendedColorType::Rgb8).unwrap();
+        } else {
+            let enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 100);
+            image::ImageEncoder::write_image(enc, &red, 8, 8, image::ExtendedColorType::Rgb8).unwrap();
+        }
+        out
+    };
+    // Name, width, height, stride, pixel format, bitmap type (0 pixels, 1 compressed) and data.
+    let cases: [(&str, i32, i32, i32, u32, i32, Vec<u8>); 5] = [
+        ("32bppARGB", 2, 1, 8, 0x0026_200A, 0, [0u8, 0, 255, 255].repeat(2)),
+        ("24bppRGB", 2, 1, 8, 0x0002_1808, 0, vec![0, 0, 255, 0, 0, 255, 0, 0]),
+        ("32bppRGB", 2, 1, 8, 0x0002_2009, 0, [0u8, 0, 255, 0].repeat(2)),
+        ("PNG", 8, 8, 0, 0, 1, encoded(true)),
+        ("JPEG", 8, 8, 0, 0, 1, encoded(false)),
+    ];
+    for (name, w, h, stride, format, kind, data) in cases {
+        let mut image = le32(&[0xDBC0_1002_u32 as i32, 1, w, h, stride, format as i32, kind]);
+        image.extend(data);
+        // Records are a multiple of 4 bytes long.
+        image.resize(image.len().next_multiple_of(4), 0);
+        let mut draw = le32(&[-1, 2]);
+        draw.extend([0.0f32, 0.0, w as f32, h as f32, 50.0, 0.0, 50.0, 100.0].iter().flat_map(|v| v.to_le_bytes()));
+        let emf = emf_plus_file(&[plus_rec(0x4008, 0x0500, &image), plus_rec(0x401A, 0, &draw)]);
+
+        let (img, rect) = emf_on_page(emf, [0.0; 4], 1.0);
+        let at = |fx: f32| img.pixel((rect.x + rect.w * fx) as u32, (rect.y + rect.h * 0.5) as u32);
+        let (right, left) = (at(0.75), at(0.25));
+        assert!(is_red(right), "{name}: the red bitmap is drawn on the right half: {right:?}");
+        assert!(is_paper(left), "{name}: left half should be paper: {left:?}");
+    }
+}
+
 /// An EMF+ record for [`emf_plus_file`]: type, flags and data.
 fn plus_rec(typ: u16, flags: u16, data: &[u8]) -> Vec<u8> {
     let mut v = typ.to_le_bytes().to_vec();
