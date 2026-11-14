@@ -1312,6 +1312,36 @@ fn metafile_pdf(emf: Vec<u8>) -> String {
 }
 
 fn metafile_pdf_bytes(emf: Vec<u8>) -> Vec<u8> {
+    export(&metafile_doc(emf), &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap()
+}
+
+/// The uncompressed PDF of a document holding one 70 pt metafile picture, and the picture's box
+/// on the first page in PDF space (points, y up).
+fn metafile_pdf_and_box(emf: Vec<u8>) -> (Vec<u8>, kurbo::Rect) {
+    let d = metafile_doc(emf);
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap();
+    let lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let page = &lay.pages[0];
+    let h = f64::from(page.h);
+    let r = wordcraft_layout::display::page_display(&d, page, &DisplayOptions::default())
+        .into_iter()
+        .find_map(|item| if let Draw::Image { rect, .. } = item { Some(rect) } else { None })
+        .expect("the picture is laid out");
+    let (x, y, w, ph) = (f64::from(r.x), f64::from(r.y), f64::from(r.w), f64::from(r.h));
+    (bytes, kurbo::Rect::new(x, h - y - ph, x + w, h - y))
+}
+
+/// The right half of a box.
+fn right_half(r: kurbo::Rect) -> kurbo::Rect {
+    kurbo::Rect::new((r.x0 + r.x1) / 2.0, r.y0, r.x1, r.y1)
+}
+
+/// Whether two boxes have the same edges, to within half a point.
+fn same_box(a: kurbo::Rect, b: kurbo::Rect) -> bool {
+    [a.x0 - b.x0, a.y0 - b.y0, a.x1 - b.x1, a.y1 - b.y1].iter().all(|d| d.abs() < 0.5)
+}
+
+fn metafile_doc(emf: Vec<u8>) -> Document {
     let mut d = Document::new();
     let media = d.add_media(emf, "emf");
     let mut p = Paragraph::with_text("Figure: ", CharProps::default());
@@ -1332,11 +1362,11 @@ fn metafile_pdf_bytes(emf: Vec<u8>) -> Vec<u8> {
     )
     .unwrap();
     d.body = vec![para_block(p)];
-    export(&d, &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap()
+    d
 }
 
 /// #6636: an EMF+ only file whose EmfPlusDrawImage draws a 32bppPARGB bitmap: the bitmap is
-/// embedded as an image.
+/// embedded as an image, and the page draws it into the EmfPlusDrawImage rectangle.
 #[test]
 fn emf_plus_only_bitmap_is_embedded() {
     let plus_rec = |typ: u16, flags: u16, data: &[u8]| {
@@ -1361,14 +1391,20 @@ fn emf_plus_only_bitmap_is_embedded() {
     rec.extend(((12 + comment.len()) as u32).to_le_bytes());
     rec.extend((comment.len() as u32).to_le_bytes());
     rec.extend(comment);
-    let bytes = metafile_pdf_bytes(emf_file(&[rec, emf_rec(14, &[0; 3])]));
+    let (bytes, pic) = metafile_pdf_and_box(emf_file(&[rec, emf_rec(14, &[0; 3])]));
     let images = pdf_images(&bytes);
     assert!(images.iter().any(|(w, h, ..)| (*w, *h) == (2, 2)), "the 2 × 2 bitmap is embedded");
+    let drawn = pdf_drawn_images(&bytes);
+    assert!(
+        drawn.iter().any(|&(w, h, r)| (w, h) == (2, 2) && same_box(r, right_half(pic))),
+        "the page draws the bitmap over the right half of the picture at {pic:?}: {drawn:?}"
+    );
     assert!(!String::from_utf8_lossy(&bytes).contains("0.8156"), "the gray placeholder box is not drawn");
 }
 
 /// #6636: an EMF+ only file whose EmfPlusDrawImage draws a bitmap in PixelFormat32bppARGB,
-/// 24bppRGB or 32bppRGB, or a compressed PNG or JPEG bitmap: the bitmap is embedded as an image.
+/// 24bppRGB or 32bppRGB, or a compressed PNG or JPEG bitmap: the bitmap is embedded as an image,
+/// and the page draws it into the EmfPlusDrawImage rectangle.
 #[test]
 fn emf_plus_only_bitmap_formats_are_embedded() {
     let plus_rec = |typ: u16, flags: u16, data: &[u8]| {
@@ -1416,9 +1452,14 @@ fn emf_plus_only_bitmap_formats_are_embedded() {
         rec.extend(((12 + comment.len()) as u32).to_le_bytes());
         rec.extend((comment.len() as u32).to_le_bytes());
         rec.extend(comment);
-        let bytes = metafile_pdf_bytes(emf_file(&[rec, emf_rec(14, &[0; 3])]));
+        let (bytes, pic) = metafile_pdf_and_box(emf_file(&[rec, emf_rec(14, &[0; 3])]));
         let images = pdf_images(&bytes);
         assert!(images.iter().any(|(iw, ih, ..)| (*iw, *ih) == (w as u32, h as u32)), "{name}: the {w} × {h} bitmap is embedded");
+        let drawn = pdf_drawn_images(&bytes);
+        assert!(
+            drawn.iter().any(|&(iw, ih, r)| (iw, ih) == (w as u32, h as u32) && same_box(r, right_half(pic))),
+            "{name}: the page draws the bitmap over the right half of the picture at {pic:?}: {drawn:?}"
+        );
         assert!(!String::from_utf8_lossy(&bytes).contains("0.8156"), "{name}: the gray placeholder box is not drawn");
     }
 }
@@ -2336,6 +2377,40 @@ fn pdf_images(bytes: &[u8]) -> Vec<(u32, u32, Vec<String>, Vec<Vec<u8>>)> {
         out.push((w, h, filters, px));
     }
     out
+}
+
+/// The images the pages draw, through hayro's interpreter: pixel width and height, and the box each
+/// one is drawn into, in PDF space (points, y up).
+fn pdf_drawn_images(bytes: &[u8]) -> Vec<(u32, u32, kurbo::Rect)> {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    struct Ex(Vec<(u32, u32, kurbo::Rect)>);
+    impl Device<'_> for Ex {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, image: Image<'_, '_>, t: kurbo::Affine) {
+            // The transform maps the image's pixel grid onto the page.
+            let (w, h) = (image.width(), image.height());
+            self.0.push((w, h, t.transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, f64::from(w), f64::from(h)))));
+        }
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+    let pdf = hayro_syntax::Pdf::new(bytes.to_vec()).expect("parse");
+    let cache = InterpreterCache::new();
+    let mut ex = Ex(Vec::new());
+    for page in pdf.pages().iter() {
+        let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+        interpret_page(page, &mut ctx, &mut ex);
+    }
+    ex.0
 }
 
 /// The fill opacities (`ca`) of the PDF's graphics states.
