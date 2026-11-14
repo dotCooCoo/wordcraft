@@ -287,6 +287,97 @@ fn a_watermark_is_a_shape_in_the_header_and_reads_back_as_one() {
     );
 }
 
+/// A watermark added, changed or removed in WordCraft reaches a file's page definitions.
+#[test]
+fn a_watermark_change_to_a_file_is_saved() {
+    // A file's own page definitions were written back whatever happened to its watermark, so one
+    // added, changed or removed in WordCraft was gone from the saved file.
+    let ns = crate::odt::tests::NS_T;
+    let styles = format!(
+        r#"<office:document-styles {ns}><office:automatic-styles><style:page-layout style:name="pm1" style:page-usage="mirrored"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm" fo:margin-bottom="2cm" fo:margin-left="2cm" fo:margin-right="2cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles></office:document-styles>"#
+    );
+    let content =
+        format!("<office:document-content {ns}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>");
+    let plain = crate::odt::tests::package(&content, Some(&styles));
+    let styles_of = |d: &Document| crate::odt::tests::entry(&export(d).unwrap(), "styles.xml");
+    let shape = "PowerPlusWaterMarkObject";
+
+    // Added.
+    let mut d = import(&plain).unwrap();
+    d.settings.watermark = Some(wordcraft_doc::Watermark { text: "DRAFT".into(), ..Default::default() });
+    let saved = export(&d).unwrap();
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(s.contains(shape) && s.contains("DRAFT"), "added: {s}");
+    assert_eq!(import(&saved).unwrap().settings.watermark.map(|w| w.text).as_deref(), Some("DRAFT"));
+
+    // Saved again with nothing changed, it stays as the file has it.
+    let read = import(&saved).unwrap();
+    let again = styles_of(&read);
+    assert_eq!(again.matches(shape).count(), s.matches(shape).count(), "{again}");
+
+    // Changed.
+    let mut d = import(&saved).unwrap();
+    if let Some(w) = d.settings.watermark.as_mut() {
+        w.text = "COPY".into();
+    }
+    let s = styles_of(&d);
+    assert!(s.contains("COPY") && !s.contains("DRAFT"), "changed: {s}");
+
+    // Removed.
+    let mut d = import(&saved).unwrap();
+    d.settings.watermark = None;
+    let s = styles_of(&d);
+    assert!(!s.contains(shape) && !s.contains("DRAFT"), "removed: {s}");
+
+    // One with no text isn't written, so it's no change to the file's page definitions.
+    let mut d = import(&plain).unwrap();
+    d.settings.watermark = Some(wordcraft_doc::Watermark { text: "  ".into(), ..Default::default() });
+    let s = styles_of(&d);
+    assert!(s.contains(r#"style:page-usage="mirrored""#) && !s.contains(shape), "no text: {s}");
+}
+
+/// Different Odd & Even Pages turned on or off in WordCraft reaches a file's page definitions.
+#[test]
+fn different_odd_and_even_pages_changed_in_a_file_is_saved() {
+    // A file's own page definitions were written back whatever happened to this setting, so the
+    // left pages' header stayed after it was turned off.
+    let ns = crate::odt::tests::NS_T;
+    let file = |left: &str| {
+        let styles = format!(
+            r#"<office:document-styles {ns}><office:automatic-styles><style:page-layout style:name="pm1" style:page-usage="mirrored"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-top="2cm" fo:margin-bottom="2cm" fo:margin-left="2cm" fo:margin-right="2cm"/><style:header-style><style:header-footer-properties fo:min-height="1cm"/></style:header-style></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>Right head</text:p></style:header>{left}</style:master-page></office:master-styles></office:document-styles>"#
+        );
+        let content = format!(
+            "<office:document-content {ns}><office:body><office:text><text:p>x</text:p></office:text></office:body></office:document-content>"
+        );
+        crate::odt::tests::package(&content, Some(&styles))
+    };
+    let styles_of = |d: &Document| crate::odt::tests::entry(&export(d).unwrap(), "styles.xml");
+
+    // On in the file, and nothing changed: the file's own.
+    let both = file("<style:header-left><text:p>Left head</text:p></style:header-left>");
+    let d = import(&both).unwrap();
+    assert!(d.settings.even_odd_headers);
+    let s = styles_of(&d);
+    assert!(s.contains(r#"style:page-usage="mirrored""#) && s.contains("Left head"), "as read: {s}");
+
+    // Turned off.
+    let mut d = import(&both).unwrap();
+    d.settings.even_odd_headers = false;
+    let saved = export(&d).unwrap();
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(!s.contains("<style:header-left") && s.contains("Right head"), "off: {s}");
+    assert!(!import(&saved).unwrap().settings.even_odd_headers);
+
+    // Off in the file, and turned on: left pages have their own header, an empty one so far.
+    let mut d = import(&file("")).unwrap();
+    assert!(!d.settings.even_odd_headers);
+    d.settings.even_odd_headers = true;
+    let saved = export(&d).unwrap();
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(s.contains("<style:header-left") && s.contains("Right head"), "on: {s}");
+    assert!(import(&saved).unwrap().settings.even_odd_headers);
+}
+
 #[test]
 fn libreoffices_watermark_reads_as_the_watermark() {
     // As LibreOffice's Format › Watermark writes it (observed): turned, half see-through.
@@ -303,4 +394,83 @@ fn libreoffices_watermark_reads_as_the_watermark() {
     assert_eq!((wm.text.as_str(), wm.color, wm.diagonal, wm.semitransparent), ("DRAFT", wordcraft_doc::Rgb(0xc0, 0xc0, 0xc0), true, true));
     let [w, h] = wm.size.unwrap();
     assert!((w - 6.69 * 72.0).abs() < 0.5 && (h - 2.24 * 72.0).abs() < 0.5);
+}
+
+/// A picture in a header anchored to the page on both axes exports as a page-anchored
+/// ODT frame with matching coordinates and round-trips with page-relative relations.
+#[test]
+fn a_page_anchored_picture_in_a_header_exports_with_page_anchor() {
+    let mut d = Document::new();
+    d.body = vec![text_para("Body", Default::default())];
+    let pic = {
+        let img = image::RgbaImage::from_fn(4, 4, |_, _| image::Rgba([10, 20, 30, 255]));
+        let mut png = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        png
+    };
+    let media = d.add_media(pic, "png");
+    let float = wordcraft_doc::para::Float {
+        wrap: wordcraft_doc::para::Wrap::Square,
+        h_rel: wordcraft_doc::para::Anchor::Page,
+        v_rel: wordcraft_doc::para::Anchor::Page,
+        x: 0.0,
+        y: 0.0,
+        ..Default::default()
+    };
+    let mut hp = Paragraph::new();
+    hp.text = wordcraft_doc::para::OBJ.into();
+    hp.objects.push(InlineObject::Image { media, w: 100.0, h: 50.0, alt: "pic".into(), float, crop: [0.0; 4], fx: Default::default(), ole: None });
+    hp.runs = vec![wordcraft_doc::para::Run { len: hp.text.len(), props: Default::default() }];
+    d.parts.insert(1, part(PartKind::Header, vec![para_block(hp)]));
+    d.last_section.headers.default = Some(1);
+
+    let saved = export(&d).unwrap();
+    let styles = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(styles.contains(r#"text:anchor-type="page""#), "{styles}");
+    assert!(styles.contains(r#"svg:x="0pt""#) && styles.contains(r#"svg:y="0pt""#), "{styles}");
+    assert!(!styles.contains(r#"text:anchor-type="paragraph""#), "{styles}");
+
+    let back = import(&saved).unwrap();
+    let h = back.parts.get(&back.last_section.headers.default.unwrap()).unwrap().blocks[0].as_para().unwrap();
+    let InlineObject::Image { float, .. } = &h.objects[0] else { panic!("not an image") };
+    assert_eq!((float.h_rel, float.v_rel, float.x, float.y), (wordcraft_doc::para::Anchor::Page, wordcraft_doc::para::Anchor::Page, 0.0, 0.0));
+}
+
+/// Mixed page-relative and paragraph/line/char anchor relations export with the proper
+/// anchor type and retain placement and anchor relationships through ODT export and import.
+#[test]
+fn mixed_anchor_relations_preserve_placement_and_roundtrip() {
+    for (h_rel, v_rel, expected_anchor, expected_hrel, expected_vrel) in [
+        (wordcraft_doc::para::Anchor::Page, wordcraft_doc::para::Anchor::Paragraph, "paragraph", "page", "paragraph"),
+        (wordcraft_doc::para::Anchor::Column, wordcraft_doc::para::Anchor::Page, "paragraph", "paragraph-content", "page"),
+        (wordcraft_doc::para::Anchor::Character, wordcraft_doc::para::Anchor::Page, "paragraph", "char", "page"),
+        (wordcraft_doc::para::Anchor::Page, wordcraft_doc::para::Anchor::Line, "char", "page", "line"),
+    ] {
+        let mut d = Document::new();
+        let pic = {
+            let img = image::RgbaImage::from_fn(4, 4, |_, _| image::Rgba([10, 20, 30, 255]));
+            let mut png = Vec::new();
+            img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+            png
+        };
+        let media = d.add_media(pic, "png");
+        let float = wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, h_rel, v_rel, x: 15.0, y: 25.0, ..Default::default() };
+        let mut p = Paragraph::new();
+        p.text = wordcraft_doc::para::OBJ.into();
+        p.objects.push(InlineObject::Image { media, w: 100.0, h: 50.0, alt: "pic".into(), float, crop: [0.0; 4], fx: Default::default(), ole: None });
+        p.runs = vec![wordcraft_doc::para::Run { len: p.text.len(), props: Default::default() }];
+        d.body = vec![para_block(p)];
+
+        let saved = export(&d).unwrap();
+        let content = crate::odt::tests::entry(&saved, "content.xml");
+        assert!(content.contains(&format!(r#"text:anchor-type="{expected_anchor}""#)), "missing {expected_anchor}: {content}");
+        assert!(content.contains(&format!(r#"style:horizontal-rel="{expected_hrel}""#)), "missing {expected_hrel}: {content}");
+        assert!(content.contains(&format!(r#"style:vertical-rel="{expected_vrel}""#)), "missing {expected_vrel}: {content}");
+
+        let back = import(&saved).unwrap();
+        let p_back = back.body[0].as_para().unwrap();
+        let InlineObject::Image { float: back_float, .. } = &p_back.objects[0] else { panic!("not an image") };
+        assert_eq!((back_float.h_rel, back_float.v_rel), (h_rel, v_rel));
+        assert!((back_float.x - 15.0).abs() < 0.01 && (back_float.y - 25.0).abs() < 0.01, "{back_float:?}");
+    }
 }
